@@ -19,6 +19,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache-dependency-path: frpc-engine/go.sum
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -34,10 +35,6 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1" --sdk_root=$ANDROID_HOME
 
-      - name: Resolve Go dependencies
-        working-directory: frpc-engine
-        run: go mod tidy
-
       - name: Install gomobile
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
@@ -47,14 +44,15 @@ jobs:
         run: gomobile init
 
       - name: Build frpc-engine .aar
+        working-directory: frpc-engine
         run: |
-          mkdir -p android/app/libs
+          go mod tidy
+          mkdir -p ../android/app/libs
           gomobile bind \
             -target=android \
             -androidapi 26 \
-            -o android/app/libs/frpc-engine.aar \
-            -v \
-            ./frpc-engine/
+            -o ../android/app/libs/frpc-engine.aar \
+            .
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4

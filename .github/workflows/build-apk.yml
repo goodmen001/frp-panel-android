@@ -52,13 +52,13 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" --sdk_root=$ANDROID_HOME
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+        working-directory: android-app/android
+        run: |
+          gradle wrapper --gradle-version=8.9
 
       - name: Build debug APK
         working-directory: android-app/android
-        run: gradle assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -93,7 +93,7 @@ class FrpcProcess(private val context: Context) {
 
             process = pb.start()
             running = true
-            Log.i(TAG, "frpc process started (pid: ${process?.pid()})")
+            Log.i(TAG, "frpc process started")
 
             // Read stdout in background
             Thread {
@@ -142,7 +142,7 @@ class FrpcProcess(private val context: Context) {
         val proc = process
         return ProcessStatus(
             running = running && proc?.isAlive == true,
-            pid = if (running && proc?.isAlive == true) proc.pid() else null
+            pid = null
         )
     }
 

@@ -1,8 +1,11 @@
 package com.frppanel.android
 
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -14,12 +17,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 
 class MainActivity : ComponentActivity() {
 
     private val serviceIntent: Intent by lazy {
         Intent(this, FrpcForegroundService::class.java)
+    }
+
+    private var serviceBound = false
+    private var boundService: FrpcForegroundService? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as FrpcForegroundService.LocalBinder
+            boundService = binder.getService()
+            serviceBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            boundService = null
+            serviceBound = false
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,9 +52,23 @@ class MainActivity : ComponentActivity() {
                     onStart = { url, user, pass, cid ->
                         startEngine(url, user, pass, cid)
                     },
-                    onStop = { stopEngine() }
+                    onStop = { stopEngine() },
+                    service = boundService
                 )
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bindService(serviceIntent, connection, BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (serviceBound) {
+            unbindService(connection)
+            serviceBound = false
         }
     }
 
@@ -63,20 +96,29 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FrpcPanelUI(
     onStart: (String, String, String, String) -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    service: FrpcForegroundService?
 ) {
     var masterUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var clientId by remember { mutableStateOf("") }
+    var clientName by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
 
-    // Poll status from service (via ProcessManager static state in service)
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(2000)
-            // Will be updated when service is bound - for now use simple polling
+    // Observe service status when bound
+    LaunchedEffect(service) {
+        if (service != null) {
+            service.status.collectLatest { s ->
+                statusText = s
+            }
+        }
+    }
+    LaunchedEffect(service) {
+        if (service != null) {
+            service.running.collectLatest { r ->
+                isRunning = r
+            }
         }
     }
 
@@ -131,8 +173,8 @@ fun FrpcPanelUI(
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
-            value = clientId,
-            onValueChange = { clientId = it },
+            value = clientName,
+            onValueChange = { clientName = it },
             label = { Text("Client Name") },
             placeholder = { Text("e.g. my-android-phone") },
             singleLine = true,
@@ -173,8 +215,8 @@ fun FrpcPanelUI(
             Button(
                 onClick = {
                     if (masterUrl.isNotBlank() && username.isNotBlank() &&
-                        password.isNotBlank() && clientId.isNotBlank()) {
-                        onStart(masterUrl.trim(), username.trim(), password.trim(), clientId.trim())
+                        password.isNotBlank() && clientName.isNotBlank()) {
+                        onStart(masterUrl.trim(), username.trim(), password.trim(), clientName.trim())
                     }
                 },
                 modifier = Modifier.weight(1f),

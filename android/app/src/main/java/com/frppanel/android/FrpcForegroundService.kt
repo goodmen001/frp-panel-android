@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -32,6 +33,11 @@ class FrpcForegroundService : Service() {
         private const val TAG = "FrpcForegroundService"
     }
 
+    inner class LocalBinder : Binder() {
+        fun getService(): FrpcForegroundService = this@FrpcForegroundService
+    }
+
+    private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var frpcProcess: FrpcProcess
 
@@ -62,10 +68,10 @@ class FrpcForegroundService : Service() {
                 stopSelf()
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
         scope.cancel()
@@ -104,7 +110,6 @@ class FrpcForegroundService : Service() {
             updateNotification("Looking up client $clientName")
             var configResult = api.getClientConfig(clientName)
             if (!configResult.success) {
-                // Client might not exist yet — try to register it
                 _status.value = "Registering client..."
                 updateNotification("Registering client $clientName")
                 val initResult = api.initClient(clientName)
@@ -116,7 +121,6 @@ class FrpcForegroundService : Service() {
                 }
                 Log.i(TAG, "Client registered: ${initResult.clientId}")
 
-                // Now get config with the full client ID
                 _status.value = "Fetching config..."
                 updateNotification("Fetching config for ${initResult.clientId}")
                 configResult = api.getClientConfig(initResult.clientId!!)

@@ -51,7 +51,11 @@ class FrpcForegroundService : Service() {
         super.onCreate()
         frpcProcess = FrpcProcess(this)
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Initializing..."))
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("Initializing..."))
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,6 +85,7 @@ class FrpcForegroundService : Service() {
 
     private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
         scope.launch {
+            try {
             _status.value = "Connecting..."
             updateNotification("Connecting to $masterUrl")
 
@@ -159,6 +164,12 @@ class FrpcForegroundService : Service() {
                 _running.value = false
                 updateNotification("Start failed")
             }
+            } catch (e: Exception) {
+                Log.e(TAG, "Engine crashed", e)
+                _status.value = "Error: ${e.message}"
+                _running.value = false
+                updateNotification("Error: ${e.message}")
+            }
         }
     }
 
@@ -188,7 +199,7 @@ class FrpcForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("FRP Panel Client")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

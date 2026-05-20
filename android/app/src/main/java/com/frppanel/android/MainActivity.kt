@@ -1,13 +1,17 @@
 package com.frppanel.android
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -17,13 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.collectLatest
 
 class MainActivity : ComponentActivity() {
-
-    private val serviceIntent: Intent by lazy {
-        Intent(this, FrpcForegroundService::class.java)
-    }
 
     private var serviceBound = false
     private var boundService: FrpcForegroundService? = null
@@ -41,8 +42,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notifPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted or not, we proceed anyway */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Request notification permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
 
         setContent {
             MaterialTheme(
@@ -61,7 +75,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        bindService(serviceIntent, connection, BIND_AUTO_CREATE)
+        bindService(
+            Intent(this, FrpcForegroundService::class.java),
+            connection, BIND_AUTO_CREATE
+        )
     }
 
     override fun onStop() {
@@ -69,11 +86,13 @@ class MainActivity : ComponentActivity() {
         if (serviceBound) {
             unbindService(connection)
             serviceBound = false
+            boundService = null
         }
     }
 
     private fun startEngine(masterUrl: String, username: String, password: String, clientId: String) {
-        serviceIntent.apply {
+        Toast.makeText(this, "Starting...", Toast.LENGTH_SHORT).show()
+        val intent = Intent(this, FrpcForegroundService::class.java).apply {
             action = FrpcForegroundService.ACTION_START
             putExtra(FrpcForegroundService.EXTRA_MASTER_URL, masterUrl)
             putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
@@ -81,15 +100,17 @@ class MainActivity : ComponentActivity() {
             putExtra(FrpcForegroundService.EXTRA_CLIENT_ID, clientId)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
+            startForegroundService(intent)
         } else {
-            startService(serviceIntent)
+            startService(intent)
         }
     }
 
     private fun stopEngine() {
-        serviceIntent.action = FrpcForegroundService.ACTION_STOP
-        startService(serviceIntent)
+        val intent = Intent(this, FrpcForegroundService::class.java).apply {
+            action = FrpcForegroundService.ACTION_STOP
+        }
+        startService(intent)
     }
 }
 
@@ -106,19 +127,14 @@ fun FrpcPanelUI(
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
 
-    // Observe service status when bound
     LaunchedEffect(service) {
         if (service != null) {
-            service.status.collectLatest { s ->
-                statusText = s
-            }
+            service.status.collectLatest { s -> statusText = s }
         }
     }
     LaunchedEffect(service) {
         if (service != null) {
-            service.running.collectLatest { r ->
-                isRunning = r
-            }
+            service.running.collectLatest { r -> isRunning = r }
         }
     }
 
@@ -184,7 +200,6 @@ fun FrpcPanelUI(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Status card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -215,8 +230,14 @@ fun FrpcPanelUI(
             Button(
                 onClick = {
                     if (masterUrl.isNotBlank() && username.isNotBlank() &&
-                        password.isNotBlank() && clientName.isNotBlank()) {
-                        onStart(masterUrl.trim(), username.trim(), password.trim(), clientName.trim())
+                        password.isNotBlank() && clientName.isNotBlank()
+                    ) {
+                        onStart(
+                            masterUrl.trim(), username.trim(),
+                            password.trim(), clientName.trim()
+                        )
+                    } else {
+                        // no-op
                     }
                 },
                 modifier = Modifier.weight(1f),

@@ -65,7 +65,7 @@ fun FrpcPanelUI(
     onStart: (String, String, String, String) -> Unit,
     onStop: () -> Unit
 ) {
-    var masterUrl by remember { mutableStateOf("https://api.ekxuexi.cn:3003") }
+    var masterUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("") }
@@ -97,7 +97,7 @@ fun FrpcPanelUI(
             value = masterUrl,
             onValueChange = { masterUrl = it },
             label = { Text("Master URL") },
-            placeholder = { Text("https://api.ekxuexi.cn:3003") },
+            placeholder = { Text("https://your-server.com:3003") },
             singleLine = true,
             enabled = !isRunning,
             modifier = Modifier.fillMaxWidth(),
@@ -133,8 +133,8 @@ fun FrpcPanelUI(
         OutlinedTextField(
             value = clientId,
             onValueChange = { clientId = it },
-            label = { Text("Client ID") },
-            placeholder = { Text("admin.c.myandroid@1") },
+            label = { Text("Client Name") },
+            placeholder = { Text("e.g. my-android-phone") },
             singleLine = true,
             enabled = !isRunning,
             modifier = Modifier.fillMaxWidth()

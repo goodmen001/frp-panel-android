@@ -73,7 +73,7 @@ class FrpcForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientId: String) {
+    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
         scope.launch {
             _status.value = "Connecting..."
             updateNotification("Connecting to $masterUrl")
@@ -89,6 +89,7 @@ class FrpcForegroundService : Service() {
 
             // 2. Login to master
             val api = MasterApi(masterUrl.trimEnd('/'))
+            _status.value = "Logging in..."
             val loginResult = api.login(username, password)
             if (!loginResult.success) {
                 _status.value = "Error: ${loginResult.error}"
@@ -96,11 +97,31 @@ class FrpcForegroundService : Service() {
                 updateNotification("Login failed")
                 return@launch
             }
+            Log.i(TAG, "Login successful")
 
-            // 3. Get client config
-            _status.value = "Fetching config..."
-            updateNotification("Fetching config for $clientId")
-            val configResult = api.getClientConfig(clientId)
+            // 3. Try to get client config; if client doesn't exist, init it first
+            _status.value = "Looking up client..."
+            updateNotification("Looking up client $clientName")
+            var configResult = api.getClientConfig(clientName)
+            if (!configResult.success) {
+                // Client might not exist yet — try to register it
+                _status.value = "Registering client..."
+                updateNotification("Registering client $clientName")
+                val initResult = api.initClient(clientName)
+                if (!initResult.success) {
+                    _status.value = "Error: ${initResult.error}"
+                    _running.value = false
+                    updateNotification("Client registration failed")
+                    return@launch
+                }
+                Log.i(TAG, "Client registered: ${initResult.clientId}")
+
+                // Now get config with the full client ID
+                _status.value = "Fetching config..."
+                updateNotification("Fetching config for ${initResult.clientId}")
+                configResult = api.getClientConfig(initResult.clientId!!)
+            }
+
             if (!configResult.success) {
                 _status.value = "Error: ${configResult.error}"
                 _running.value = false
@@ -108,8 +129,11 @@ class FrpcForegroundService : Service() {
                 return@launch
             }
 
+            val clientInfo = configResult.clientInfo!!
+            Log.i(TAG, "Got config for client: ${clientInfo.id}")
+
             // 4. Write config file
-            val configFile = frpcProcess.writeConfig(configResult.configJson!!)
+            val configFile = frpcProcess.writeConfig(clientInfo.configJson!!)
             if (configFile == null) {
                 _status.value = "Error: cannot write config"
                 _running.value = false

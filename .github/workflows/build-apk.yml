@@ -61,16 +61,20 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK to Release
+        working-directory: android-app
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v1.0.0"
+          REPO="${{ github.repository }}"
           gh release create "$TAG" \
-            android-app/android/app/build/outputs/apk/debug/*.apk \
+            --repo "$REPO" \
+            android/app/build/outputs/apk/debug/*.apk \
             --title "FRP Panel Android $TAG" \
             --notes "Auto-built from commit ${{ github.sha }}" \
             --target "${{ github.sha }}" \
             --generate-notes || \
           gh release upload "$TAG" \
-            android-app/android/app/build/outputs/apk/debug/*.apk \
+            --repo "$REPO" \
+            android/app/build/outputs/apk/debug/*.apk \
             --clobber

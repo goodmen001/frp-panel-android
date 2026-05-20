@@ -27,7 +27,7 @@ import kotlinx.coroutines.flow.collectLatest
 class MainActivity : ComponentActivity() {
 
     private var serviceBound = false
-    private var boundService: FrpcForegroundService? = null
+    private var boundService by mutableStateOf<FrpcForegroundService?>(null)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {

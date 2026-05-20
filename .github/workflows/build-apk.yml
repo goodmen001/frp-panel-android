@@ -60,9 +60,17 @@ jobs:
         working-directory: android-app/android
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: frp-panel-android
-          path: android-app/android/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
+      - name: Upload APK to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.0"
+          gh release create "$TAG" \
+            android-app/android/app/build/outputs/apk/debug/*.apk \
+            --title "FRP Panel Android $TAG" \
+            --notes "Auto-built from commit ${{ github.sha }}" \
+            --target "${{ github.sha }}" \
+            --generate-notes || \
+          gh release upload "$TAG" \
+            android-app/android/app/build/outputs/apk/debug/*.apk \
+            --clobber

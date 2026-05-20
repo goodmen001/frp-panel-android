@@ -19,7 +19,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-          cache-dependency-path: frpc-engine/go.sum
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -43,40 +42,63 @@ jobs:
       - name: Init gomobile
         run: gomobile init
 
+      - name: Debug - try go vet first
+        working-directory: frpc-engine
+        continue-on-error: true
+        run: |
+          go mod tidy
+          go vet ./... 2>&1 | tee ../android/vet_output.txt
+
       - name: Build frpc-engine .aar
         working-directory: frpc-engine
+        continue-on-error: true
         run: |
           go mod tidy
           mkdir -p ../android/app/libs
           gomobile bind \
-            -target=android \
+            -target=android/arm64 \
             -androidapi 26 \
             -o ../android/app/libs/frpc-engine.aar \
-            .
+            -v \
+            . 2>&1 | tee ../android/gomobile_output.txt
+
+      - name: Check build artifacts
+        working-directory: frpc-engine
+        run: |
+          echo "=== go.sum ==="
+          ls -la go.sum 2>&1 || echo "no go.sum"
+          echo "=== .aar ==="
+          ls -la ../android/app/libs/frpc-engine.aar 2>&1 || echo "no .aar"
+          echo "=== vet output ==="
+          cat ../android/vet_output.txt 2>/dev/null || echo "no vet output"
+          echo "=== gomobile output ==="
+          cat ../android/gomobile_output.txt 2>/dev/null || echo "no gomobile output"
+
+      - name: Upload debug logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            android/vet_output.txt
+            android/gomobile_output.txt
+          retention-days: 7
 
       - name: Setup Gradle
+        if: success()
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
       - name: Build debug APK
+        if: success()
         working-directory: android
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: frp-panel-android-debug
           path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
-
-      - name: Build release APK (unsigned)
-        working-directory: android
-        run: gradle assembleRelease --no-daemon
-
-      - name: Upload release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: frp-panel-android-release-unsigned
-          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30

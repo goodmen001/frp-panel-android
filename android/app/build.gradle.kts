@@ -19,7 +19,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -34,7 +33,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs("libs")
+            assets.srcDirs("src/main/assets")
         }
     }
 }
@@ -55,12 +54,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
 
+    // OkHttp (REST API client)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-
-    // Material
-    implementation("com.google.android.material:material:1.12.0")
-
-    // gomobile .aar (frpc engine)
-    implementation(files("libs/frpc-engine.aar"))
 }

@@ -5,7 +5,6 @@ on:
     branches: [main]
     paths-ignore:
       - "**.md"
-      - "scripts/**"
   workflow_dispatch:
 
 jobs:
@@ -14,11 +13,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: android-app
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+
+      - name: Checkout fatedier/frp
+        uses: actions/checkout@v4
+        with:
+          repository: fatedier/frp
+          ref: v0.65.0
+          path: frp-source
+
+      - name: Cross-compile frpc for Android
+        working-directory: frp-source
+        run: |
+          mkdir -p ../android-app/android/app/src/main/assets
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o ../android-app/android/app/src/main/assets/frpc ./cmd/frpc
+          echo "=== frpc binary for Android ==="
+          file ../android-app/android/app/src/main/assets/frpc
+          ls -lh ../android-app/android/app/src/main/assets/frpc
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -32,73 +49,20 @@ jobs:
       - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1" --sdk_root=$ANDROID_HOME
-
-      - name: Install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-
-      - name: Init gomobile
-        run: gomobile init
-
-      - name: Debug - try go vet first
-        working-directory: frpc-engine
-        continue-on-error: true
-        run: |
-          go mod tidy
-          go vet ./... 2>&1 | tee ../android/vet_output.txt
-
-      - name: Build frpc-engine .aar
-        working-directory: frpc-engine
-        continue-on-error: true
-        run: |
-          go mod tidy
-          mkdir -p ../android/app/libs
-          gomobile bind \
-            -target=android/arm64 \
-            -androidapi 26 \
-            -o ../android/app/libs/frpc-engine.aar \
-            -v \
-            . 2>&1 | tee ../android/gomobile_output.txt
-
-      - name: Check build artifacts
-        working-directory: frpc-engine
-        run: |
-          echo "=== go.sum ==="
-          ls -la go.sum 2>&1 || echo "no go.sum"
-          echo "=== .aar ==="
-          ls -la ../android/app/libs/frpc-engine.aar 2>&1 || echo "no .aar"
-          echo "=== vet output ==="
-          cat ../android/vet_output.txt 2>/dev/null || echo "no vet output"
-          echo "=== gomobile output ==="
-          cat ../android/gomobile_output.txt 2>/dev/null || echo "no gomobile output"
-
-      - name: Upload debug logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            android/vet_output.txt
-            android/gomobile_output.txt
-          retention-days: 7
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" --sdk_root=$ANDROID_HOME
 
       - name: Setup Gradle
-        if: success()
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
       - name: Build debug APK
-        if: success()
-        working-directory: android
+        working-directory: android-app/android
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: frp-panel-android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: frp-panel-android
+          path: android-app/android/app/build/outputs/apk/debug/*.apk
           retention-days: 30

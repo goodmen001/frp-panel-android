@@ -31,12 +31,17 @@ class FrpcForegroundService : Service() {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private lateinit var frpcProcess: FrpcProcess
 
-    private val _status = MutableStateFlow(FrpcManager.getStatus())
-    val status: StateFlow<FrpcManager.Status> = _status.asStateFlow()
+    private val _status = MutableStateFlow("Stopped")
+    val status: StateFlow<String> = _status.asStateFlow()
+
+    private val _running = MutableStateFlow(false)
+    val running: StateFlow<Boolean> = _running.asStateFlow()
 
     override fun onCreate() {
         super.onCreate()
+        frpcProcess = FrpcProcess(this)
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Initializing..."))
     }
@@ -68,23 +73,70 @@ class FrpcForegroundService : Service() {
 
     private fun startEngine(masterUrl: String, username: String, password: String, clientId: String) {
         scope.launch {
-            updateNotification("Connecting...")
-            val result = FrpcManager.start(masterUrl, username, password, clientId)
-            if (result.isSuccess) {
-                _status.value = FrpcManager.getStatus()
+            _status.value = "Connecting..."
+            updateNotification("Connecting to $masterUrl")
+
+            // 1. Extract frpc binary
+            val binary = frpcProcess.extractBinary()
+            if (binary == null) {
+                _status.value = "Error: binary extraction failed"
+                _running.value = false
+                updateNotification("Binary extraction failed")
+                return@launch
+            }
+
+            // 2. Login to master
+            val api = MasterApi(masterUrl.trimEnd('/'))
+            val loginResult = api.login(username, password)
+            if (!loginResult.success) {
+                _status.value = "Error: ${loginResult.error}"
+                _running.value = false
+                updateNotification("Login failed")
+                return@launch
+            }
+
+            // 3. Get client config
+            _status.value = "Fetching config..."
+            updateNotification("Fetching config for $clientId")
+            val configResult = api.getClientConfig(clientId)
+            if (!configResult.success) {
+                _status.value = "Error: ${configResult.error}"
+                _running.value = false
+                updateNotification("Config failed")
+                return@launch
+            }
+
+            // 4. Write config file
+            val configFile = frpcProcess.writeConfig(configResult.configJson!!)
+            if (configFile == null) {
+                _status.value = "Error: cannot write config"
+                _running.value = false
+                updateNotification("Config write failed")
+                return@launch
+            }
+
+            // 5. Start frpc
+            _status.value = "Starting frpc..."
+            updateNotification("Starting tunnels...")
+            val started = frpcProcess.start(binary, configFile)
+            if (started) {
+                _status.value = "Running"
+                _running.value = true
                 updateNotification("Tunnels active")
+                Log.i(TAG, "frpc started successfully")
             } else {
-                _status.value = FrpcManager.Status(false, "Error: ${result.exceptionOrNull()?.message}")
-                updateNotification("Connection failed")
+                _status.value = "Error: frpc failed to start"
+                _running.value = false
+                updateNotification("Start failed")
             }
         }
     }
 
     private fun stopEngine() {
-        scope.launch {
-            FrpcManager.stop()
-            _status.value = FrpcManager.Status(false, "Stopped")
-        }
+        frpcProcess.stop()
+        _status.value = "Stopped"
+        _running.value = false
+        updateNotification("Stopped")
     }
 
     private fun createNotificationChannel() {
@@ -94,7 +146,7 @@ class FrpcForegroundService : Service() {
                 "FRPC Tunnel",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "FRPC tunnel service notification"
+                description = "FRPC tunnel service"
                 setShowBadge(false)
             }
             val nm = getSystemService(NotificationManager::class.java)

@@ -40,11 +40,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startEngine(masterUrl: String, username: String, password: String, clientId: String) {
-        serviceIntent.action = FrpcForegroundService.ACTION_START
-        serviceIntent.putExtra(FrpcForegroundService.EXTRA_MASTER_URL, masterUrl)
-        serviceIntent.putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
-        serviceIntent.putExtra(FrpcForegroundService.EXTRA_PASSWORD, password)
-        serviceIntent.putExtra(FrpcForegroundService.EXTRA_CLIENT_ID, clientId)
+        serviceIntent.apply {
+            action = FrpcForegroundService.ACTION_START
+            putExtra(FrpcForegroundService.EXTRA_MASTER_URL, masterUrl)
+            putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
+            putExtra(FrpcForegroundService.EXTRA_PASSWORD, password)
+            putExtra(FrpcForegroundService.EXTRA_CLIENT_ID, clientId)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
         } else {
@@ -70,13 +72,11 @@ fun FrpcPanelUI(
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
 
-    // Poll status
+    // Poll status from service (via ProcessManager static state in service)
     LaunchedEffect(Unit) {
         while (true) {
-            val s = FrpcManager.getStatus()
-            isRunning = s.running
-            statusText = s.text
             delay(2000)
+            // Will be updated when service is bound - for now use simple polling
         }
     }
 

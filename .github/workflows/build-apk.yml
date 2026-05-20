@@ -67,16 +67,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.0.0"
+          VER="${{ github.run_number }}"
+          TAG="v1.0.${VER}"
           REPO="${{ github.repository }}"
           gh release create "$TAG" \
             --repo "$REPO" \
             android/app/build/outputs/apk/debug/*.apk \
-            --title "FRP Panel Android $TAG" \
-            --notes "Auto-built from commit ${{ github.sha }}" \
-            --target "${{ github.sha }}" \
-            --generate-notes || \
-          gh release upload "$TAG" \
-            --repo "$REPO" \
-            android/app/build/outputs/apk/debug/*.apk \
-            --clobber
+            --title "FRP Panel Android v1.0.${VER}" \
+            --notes "Build ${VER} from commit ${{ github.sha }}" \
+            --target "${{ github.sha }}"

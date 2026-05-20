@@ -1,0 +1,84 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "scripts/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1" --sdk_root=$ANDROID_HOME
+
+      - name: Resolve Go dependencies
+        working-directory: frpc-engine
+        run: go mod tidy
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+
+      - name: Init gomobile
+        run: gomobile init
+
+      - name: Build frpc-engine .aar
+        run: |
+          mkdir -p android/app/libs
+          gomobile bind \
+            -target=android \
+            -androidapi 26 \
+            -o android/app/libs/frpc-engine.aar \
+            -v \
+            ./frpc-engine/
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: frp-panel-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Build release APK (unsigned)
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: frp-panel-android-release-unsigned
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30

@@ -1,0 +1,17 @@
+# Go
+frpc-engine/vendor/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/app/libs/
+android/local.properties
+android/captures/
+android/.idea/
+
+# General
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

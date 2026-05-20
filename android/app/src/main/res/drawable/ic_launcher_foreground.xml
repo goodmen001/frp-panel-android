@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Network node icon -->
+    <group
+        android:translateX="24"
+        android:translateY="24">
+        <!-- Center dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,30m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+        <!-- Left dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M10,30m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+        <!-- Right dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M50,30m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+        <!-- Top dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,10m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+        <!-- Bottom dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,50m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+        <!-- Connection lines -->
+        <path
+            android:fillColor="@android:color/transparent"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:pathData="M30,30L14,30M30,30L46,30M30,30L30,14M30,30L30,46" />
+    </group>
+</vector>

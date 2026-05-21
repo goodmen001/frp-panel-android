@@ -12,6 +12,10 @@ import java.util.concurrent.TimeUnit
 /**
  * REST API client for frp-panel master.
  * Supports login, client registration, and config retrieval.
+ *
+ * The frp-panel API wraps ALL responses in a Result envelope:
+ *   {"code":200, "msg":"success", "body": { <protobuf-json> }}
+ * Status codes inside body are integers (1=success, 4=invalid, etc.).
  */
 class MasterApi(private val baseUrl: String) {
 
@@ -65,15 +69,26 @@ class MasterApi(private val baseUrl: String) {
                 .build()
 
             val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: return@withContext LoginResult(false, null, "Empty response")
+            val responseBody = response.body?.string()
+                ?: return@withContext LoginResult(false, null, "Empty response")
 
             val respJson = JSONObject(responseBody)
-            val status = respJson.optJSONObject("status")
-            val code = status?.optString("code") ?: ""
-            val message = status?.optString("message") ?: ""
 
-            if (code == "RESP_CODE_SUCCESS") {
-                val t = respJson.optString("token", "")
+            // Check the Result wrapper
+            if (respJson.optInt("code", 0) != 200) {
+                return@withContext LoginResult(false, null, respJson.optString("msg", "Request failed"))
+            }
+
+            // The actual response is inside "body"
+            val bodyObj = respJson.optJSONObject("body")
+                ?: return@withContext LoginResult(false, null, "No body in response")
+
+            val status = bodyObj.optJSONObject("status")
+                ?: return@withContext LoginResult(false, null, "No status in response")
+
+            // Status code is an integer: 1 = RESP_CODE_SUCCESS
+            if (status.optInt("code", 0) == 1) {
+                val t = bodyObj.optString("token", "")
                 if (t.isEmpty()) {
                     LoginResult(false, null, "Empty token in response")
                 } else {
@@ -81,7 +96,7 @@ class MasterApi(private val baseUrl: String) {
                     LoginResult(true, t, null)
                 }
             } else {
-                LoginResult(false, null, "Login failed: $message")
+                LoginResult(false, null, "Login failed: ${status.optString("message", "unknown error")}")
             }
         } catch (e: Exception) {
             LoginResult(false, null, "Network error: ${e.message}")
@@ -98,14 +113,15 @@ class MasterApi(private val baseUrl: String) {
         try {
             val t = token ?: return@withContext InitResult(false, null, "Not logged in")
 
+            // protojson expects camelCase field names
             val json = JSONObject().apply {
-                put("client_id", clientName)
+                put("clientId", clientName)
                 put("ephemeral", false)
             }
-            val body = json.toString().toRequestBody(JSON)
+            val reqBody = json.toString().toRequestBody(JSON)
             val request = Request.Builder()
                 .url("$baseUrl/api/v1/client/init")
-                .post(body)
+                .post(reqBody)
                 .header("Authorization", t)
                 .build()
 
@@ -114,19 +130,27 @@ class MasterApi(private val baseUrl: String) {
                 ?: return@withContext InitResult(false, null, "Empty response")
 
             val respJson = JSONObject(responseBody)
-            val status = respJson.optJSONObject("status")
-            val code = status?.optString("code") ?: ""
-            val message = status?.optString("message") ?: ""
 
-            if (code == "RESP_CODE_SUCCESS") {
-                val cid = respJson.optString("client_id", "")
+            if (respJson.optInt("code", 0) != 200) {
+                return@withContext InitResult(false, null, respJson.optString("msg", "Request failed"))
+            }
+
+            val bodyObj = respJson.optJSONObject("body")
+                ?: return@withContext InitResult(false, null, "No body in response")
+
+            val status = bodyObj.optJSONObject("status")
+                ?: return@withContext InitResult(false, null, "No status in response")
+
+            if (status.optInt("code", 0) == 1) {
+                // Response uses proto field name "client_id" (via Go json tag)
+                val cid = bodyObj.optString("client_id", "")
                 if (cid.isEmpty()) {
                     InitResult(false, null, "Empty client_id in response")
                 } else {
                     InitResult(true, cid, null)
                 }
             } else {
-                InitResult(false, null, "Init client failed: $message")
+                InitResult(false, null, "Init client failed: ${status.optString("message", "unknown error")}")
             }
         } catch (e: Exception) {
             InitResult(false, null, "Network error: ${e.message}")
@@ -136,19 +160,19 @@ class MasterApi(private val baseUrl: String) {
     /**
      * Get client info (config + secret) from the master.
      * POST /api/v1/client/get
-     * Client ID can be either the short name (auto-transformed) or the full ID.
      */
     suspend fun getClientConfig(clientId: String): ConfigResult = withContext(Dispatchers.IO) {
         try {
             val t = token ?: return@withContext ConfigResult(false, null, "Not logged in")
 
+            // protojson expects camelCase field names
             val json = JSONObject().apply {
                 put("clientId", clientId)
             }
-            val body = json.toString().toRequestBody(JSON)
+            val reqBody = json.toString().toRequestBody(JSON)
             val request = Request.Builder()
                 .url("$baseUrl/api/v1/client/get")
-                .post(body)
+                .post(reqBody)
                 .header("Authorization", t)
                 .build()
 
@@ -157,15 +181,23 @@ class MasterApi(private val baseUrl: String) {
                 ?: return@withContext ConfigResult(false, null, "Empty response")
 
             val respJson = JSONObject(responseBody)
-            val status = respJson.optJSONObject("status")
-            val code = status?.optString("code") ?: ""
-            val message = status?.optString("message") ?: ""
 
-            if (code != "RESP_CODE_SUCCESS") {
-                return@withContext ConfigResult(false, null, "API error: $message")
+            if (respJson.optInt("code", 0) != 200) {
+                return@withContext ConfigResult(false, null, respJson.optString("msg", "Request failed"))
             }
 
-            val clientObj = respJson.optJSONObject("client")
+            val bodyObj = respJson.optJSONObject("body")
+                ?: return@withContext ConfigResult(false, null, "No body in response")
+
+            val status = bodyObj.optJSONObject("status")
+                ?: return@withContext ConfigResult(false, null, "No status in response")
+
+            if (status.optInt("code", 0) != 1) {
+                return@withContext ConfigResult(false, null,
+                    "API error: ${status.optString("message", "unknown error")}")
+            }
+
+            val clientObj = bodyObj.optJSONObject("client")
                 ?: return@withContext ConfigResult(false, null, "No client in response")
 
             if (clientObj.optBoolean("stopped", false)) {

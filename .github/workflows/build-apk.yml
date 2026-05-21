@@ -36,30 +36,11 @@ jobs:
         working-directory: frp-panel-source
         run: |
           # utils/pty uses github.com/creack/pty which requires cgo.
-          # Exclude it on Android and provide a stub instead.
+          # Exclude PTY code on Android and provide a stub instead.
           sed -i 's|//go:build !windows|//go:build !windows \&\& !android|' utils/pty/pty_other.go
-          cat > utils/pty/pty_android.go << 'GOEOF'
-          //go:build android
-
-          package pty
-
-          import "errors"
-
-          type Pty struct{}
-
-          func DownloadDependency() error { return nil }
-
-          func Start() (PTYInterface, error) {
-              return nil, errors.New("PTY not supported on Android")
-          }
-
-          func (p *Pty) Write(p []byte) (n int, err error) { return 0, errors.New("not supported") }
-          func (p *Pty) Read(p []byte) (n int, err error)  { return 0, errors.New("not supported") }
-          func (p *Pty) Getsize() (uint16, uint16, error)  { return 0, 0, errors.New("not supported") }
-          func (p *Pty) Setsize(cols, rows uint32) error   { return errors.New("not supported") }
-          func (p *Pty) Close() error                      { return nil }
-          GOEOF
+          cp ../android-app/patches/pty_android.go utils/pty/pty_android.go
           echo "=== Patched utils/pty for Android ==="
+          head -3 utils/pty/pty_android.go
 
       - name: Cross-compile frppc for Android
         working-directory: frp-panel-source

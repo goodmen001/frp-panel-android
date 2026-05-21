@@ -110,40 +110,23 @@ class FrpcForegroundService : Service() {
             }
             Log.i(TAG, "Login successful")
 
-            // 3. Try to get client config; if client doesn't exist, init it first
+            // 3. Get client config from master
             _status.value = "Looking up client..."
             updateNotification("Looking up client $clientName")
-            var configResult = api.getClientConfig(clientName)
-            if (!configResult.success) {
-                _status.value = "Registering client..."
-                updateNotification("Registering client $clientName")
-                val initResult = api.initClient(clientName)
-                if (!initResult.success) {
-                    _status.value = "Error: ${initResult.error}"
-                    _running.value = false
-                    updateNotification("Client registration failed")
-                    return@launch
-                }
-                Log.i(TAG, "Client registered: ${initResult.clientId}")
-
-                _status.value = "Fetching config..."
-                updateNotification("Fetching config for ${initResult.clientId}")
-                configResult = api.getClientConfig(initResult.clientId!!)
-            }
-
+            val configResult = api.getClientConfig(clientName)
             if (!configResult.success) {
                 _status.value = "Error: ${configResult.error}"
                 _running.value = false
-                updateNotification("Config failed")
+                updateNotification("Client config failed")
                 return@launch
             }
 
             val clientInfo = configResult.clientInfo!!
             val configJson = clientInfo.configJson
             if (configJson.isNullOrBlank()) {
-                _status.value = "No proxy config - setup in web panel first"
+                _status.value = "Client '${clientInfo.id}' has no config"
                 _running.value = false
-                updateNotification("Configure proxies in web UI, then Start again")
+                updateNotification("Client has no proxy config assigned")
                 Log.w(TAG, "Client ${clientInfo.id} has no proxy config")
                 return@launch
             }

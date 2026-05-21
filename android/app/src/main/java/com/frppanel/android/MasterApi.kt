@@ -72,6 +72,12 @@ class MasterApi(private val baseUrl: String) {
             val responseBody = response.body?.string()
                 ?: return@withContext LoginResult(false, null, "Empty response")
 
+            // Check if response is HTML (wrong URL/port)
+            if (responseBody.trimStart().startsWith("<!") || responseBody.trimStart().startsWith("<html")) {
+                return@withContext LoginResult(false, null,
+                    "Server returned HTML (wrong URL or port?). Check Master URL")
+            }
+
             val respJson = JSONObject(responseBody)
 
             // Check the Result wrapper
@@ -99,7 +105,7 @@ class MasterApi(private val baseUrl: String) {
                 LoginResult(false, null, "Login failed: ${status.optString("message", "unknown error")}")
             }
         } catch (e: Exception) {
-            LoginResult(false, null, "Network error: ${e.message}")
+            LoginResult(false, null, "Connection error: ${e.message}")
         }
     }
 
@@ -129,6 +135,10 @@ class MasterApi(private val baseUrl: String) {
             val responseBody = response.body?.string()
                 ?: return@withContext InitResult(false, null, "Empty response")
 
+            if (responseBody.trimStart().startsWith("<!") || responseBody.trimStart().startsWith("<html")) {
+                return@withContext InitResult(false, null, "Server returned HTML (wrong URL or port?)")
+            }
+
             val respJson = JSONObject(responseBody)
 
             if (respJson.optInt("code", 0) != 200) {
@@ -153,7 +163,7 @@ class MasterApi(private val baseUrl: String) {
                 InitResult(false, null, "Init client failed: ${status.optString("message", "unknown error")}")
             }
         } catch (e: Exception) {
-            InitResult(false, null, "Network error: ${e.message}")
+            InitResult(false, null, "Connection error: ${e.message}")
         }
     }
 
@@ -179,6 +189,10 @@ class MasterApi(private val baseUrl: String) {
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string()
                 ?: return@withContext ConfigResult(false, null, "Empty response")
+
+            if (responseBody.trimStart().startsWith("<!") || responseBody.trimStart().startsWith("<html")) {
+                return@withContext ConfigResult(false, null, "Server returned HTML (wrong URL or port?)")
+            }
 
             val respJson = JSONObject(responseBody)
 
@@ -213,7 +227,7 @@ class MasterApi(private val baseUrl: String) {
             val normalized = if (configStr.isEmpty()) "" else normalizeConfigKeys(configStr)
             ConfigResult(true, ClientInfo(cid, secret, normalized), null)
         } catch (e: Exception) {
-            ConfigResult(false, null, "Network error: ${e.message}")
+            ConfigResult(false, null, "Connection error: ${e.message}")
         }
     }
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -104,6 +105,19 @@ func (tm *tunnelManager) remove(clientID, serverID string) {
 		svc.Close()
 		delete(tm.services, k)
 		delete(tm.cfgs, k)
+	}
+}
+
+func (tm *tunnelManager) removeClient(clientID string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	prefix := clientID + "/"
+	for k, svc := range tm.services {
+		if strings.HasPrefix(k, prefix) {
+			svc.Close()
+			delete(tm.services, k)
+			delete(tm.cfgs, k)
+		}
 	}
 }
 
@@ -417,7 +431,7 @@ func (a *clientApp) handleRemoveFrpc(req *pb.ServerMessage) *pb.ClientMessage {
 	if err := proto.Unmarshal(req.GetData(), removeReq); err != nil {
 		return errorResp("unmarshal RemoveFRPCRequest failed: " + err.Error())
 	}
-	a.tunnels.remove(removeReq.GetClientId(), removeReq.GetServerId())
+	a.tunnels.removeClient(removeReq.GetClientId())
 	return okResp("frpc removed")
 }
 

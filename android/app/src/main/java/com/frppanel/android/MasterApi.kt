@@ -208,13 +208,9 @@ class MasterApi(private val baseUrl: String) {
             val secret = clientObj.optString("secret", null)
             val configStr = clientObj.optString("config", "")
 
-            if (configStr.isEmpty()) {
-                return@withContext ConfigResult(false, null, "Client has no config assigned")
-            }
-
-            // configStr is a JSON string containing frpc config.
-            // Normalize Proxies -> proxies, Visitors -> visitors
-            val normalized = normalizeConfigKeys(configStr)
+            // Return the client info even if config is empty — the caller
+            // decides how to handle an unconfigured client.
+            val normalized = if (configStr.isEmpty()) "" else normalizeConfigKeys(configStr)
             ConfigResult(true, ClientInfo(cid, secret, normalized), null)
         } catch (e: Exception) {
             ConfigResult(false, null, "Network error: ${e.message}")

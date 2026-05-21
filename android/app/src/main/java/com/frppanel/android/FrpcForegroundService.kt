@@ -139,10 +139,19 @@ class FrpcForegroundService : Service() {
             }
 
             val clientInfo = configResult.clientInfo!!
+            val configJson = clientInfo.configJson
+            if (configJson.isNullOrBlank()) {
+                _status.value = "No proxy config - setup in web panel first"
+                _running.value = false
+                updateNotification("Configure proxies in web UI, then Start again")
+                Log.w(TAG, "Client ${clientInfo.id} has no proxy config")
+                return@launch
+            }
+
             Log.i(TAG, "Got config for client: ${clientInfo.id}")
 
             // 4. Write config file
-            val configFile = frpcProcess.writeConfig(clientInfo.configJson!!)
+            val configFile = frpcProcess.writeConfig(configJson)
             if (configFile == null) {
                 _status.value = "Error: cannot write config"
                 _running.value = false

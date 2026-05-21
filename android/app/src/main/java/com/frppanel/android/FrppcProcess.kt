@@ -115,10 +115,11 @@ class FrppcProcess(private val context: Context) {
                 }
                 running = false
                 Log.i(TAG, "frppc process ended")
-            }.apply {
-                isDaemon = true
-                name = "frppc-stdout"
-            }.start()
+            }.also { thread ->
+                thread.isDaemon = true
+                thread.name = "frppc-stdout"
+                thread.start()
+            }
 
             return true
         } catch (e: Exception) {

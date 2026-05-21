@@ -38,7 +38,7 @@ jobs:
           mkdir -p android/app/src/main/assets build_logs
           go mod tidy 2>&1 | tee build_logs/go_mod_tidy.log
           CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build \
-            -ldflags="-s -w" \
+            -ldflags="-s -w -checklinkname=0" \
             -o android/app/src/main/assets/frppc \
             ./cmd/frppc-android/ 2>&1 | tee build_logs/go_build.log
           echo "=== frppc binary for Android ==="

@@ -13,14 +13,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.collectLatest
 
@@ -90,14 +95,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientId: String) {
+    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
         Toast.makeText(this, "Starting...", Toast.LENGTH_SHORT).show()
         val intent = Intent(this, FrpcForegroundService::class.java).apply {
             action = FrpcForegroundService.ACTION_START
             putExtra(FrpcForegroundService.EXTRA_MASTER_URL, masterUrl)
             putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
             putExtra(FrpcForegroundService.EXTRA_PASSWORD, password)
-            putExtra(FrpcForegroundService.EXTRA_CLIENT_ID, clientId)
+            putExtra(FrpcForegroundService.EXTRA_CLIENT_NAME, clientName)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -126,6 +131,10 @@ fun FrpcPanelUI(
     var clientName by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
+    var logLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showLogs by remember { mutableStateOf(false) }
+
+    val logListState = rememberLazyListState()
 
     LaunchedEffect(service) {
         if (service != null) {
@@ -135,6 +144,16 @@ fun FrpcPanelUI(
     LaunchedEffect(service) {
         if (service != null) {
             service.running.collectLatest { r -> isRunning = r }
+        }
+    }
+    LaunchedEffect(service) {
+        if (service != null) {
+            service.logLines.collectLatest { lines ->
+                logLines = lines
+                if (lines.isNotEmpty() && showLogs) {
+                    logListState.animateScrollToItem(lines.size - 1)
+                }
+            }
         }
     }
 
@@ -155,7 +174,7 @@ fun FrpcPanelUI(
             value = masterUrl,
             onValueChange = { masterUrl = it },
             label = { Text("Master URL") },
-            placeholder = { Text("https://your-server.com:3003") },
+            placeholder = { Text("https://your-server.com:9001") },
             singleLine = true,
             enabled = !isRunning,
             modifier = Modifier.fillMaxWidth(),
@@ -198,8 +217,9 @@ fun FrpcPanelUI(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
+        // Status card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -218,6 +238,43 @@ fun FrpcPanelUI(
                     color = if (isRunning) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Log toggle + content
+        if (logLines.isNotEmpty() || isRunning) {
+            TextButton(
+                onClick = { showLogs = !showLogs }
+            ) {
+                Text(if (showLogs) "Hide Logs" else "Show Logs (${logLines.size})")
+            }
+
+            if (showLogs) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                    )
+                ) {
+                    LazyColumn(
+                        state = logListState,
+                        modifier = Modifier.padding(8.dp)
+                    ) {
+                        items(logLines) { line ->
+                            Text(
+                                text = line,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 

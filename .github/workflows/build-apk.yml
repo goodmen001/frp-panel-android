@@ -21,23 +21,25 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
 
-      - name: Checkout fatedier/frp
+      - name: Checkout frp-panel source
         uses: actions/checkout@v4
         with:
-          repository: fatedier/frp
-          ref: v0.65.0
-          path: frp-source
+          # Default: upstream VaalaCat/frp-panel.
+          # Fork users: change 'repository' to your fork (e.g. goodmen001/frp-panel).
+          repository: VaalaCat/frp-panel
+          ref: main
+          path: frp-panel-source
 
-      - name: Cross-compile frpc for Android
-        working-directory: frp-source
+      - name: Cross-compile frppc for Android
+        working-directory: frp-panel-source
         run: |
           mkdir -p ../android-app/android/app/src/main/assets
-          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o ../android-app/android/app/src/main/assets/frpc ./cmd/frpc
-          echo "=== frpc binary for Android ==="
-          file ../android-app/android/app/src/main/assets/frpc
-          ls -lh ../android-app/android/app/src/main/assets/frpc
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o ../android-app/android/app/src/main/assets/frppc ./cmd/frppc
+          echo "=== frppc binary for Android ==="
+          file ../android-app/android/app/src/main/assets/frppc
+          ls -lh ../android-app/android/app/src/main/assets/frppc
 
       - name: Setup Java
         uses: actions/setup-java@v4

@@ -19,6 +19,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Foreground service that manages the frppc (frp-panel client) daemon.
+ *
+ * frppc is the Go client daemon that:
+ * 1. Connects to the frp-panel master via WebSocket/gRPC
+ * 2. Registers this device as a client
+ * 3. Maintains a persistent bidirectional connection
+ * 4. Runs the embedded frpc library in-process when the master assigns config
+ *
+ * This service handles authentication against the master's REST API,
+ * retrieves the client credentials, and manages the frppc subprocess lifecycle.
+ */
 class FrpcForegroundService : Service() {
 
     companion object {
@@ -29,7 +41,7 @@ class FrpcForegroundService : Service() {
         const val EXTRA_MASTER_URL = "master_url"
         const val EXTRA_USERNAME = "username"
         const val EXTRA_PASSWORD = "password"
-        const val EXTRA_CLIENT_ID = "client_id"
+        const val EXTRA_CLIENT_NAME = "client_name"
         private const val TAG = "FrpcForegroundService"
     }
 
@@ -39,7 +51,7 @@ class FrpcForegroundService : Service() {
 
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private lateinit var frpcProcess: FrpcProcess
+    private lateinit var frppcProcess: FrppcProcess
 
     private val _status = MutableStateFlow("Stopped")
     val status: StateFlow<String> = _status.asStateFlow()
@@ -47,9 +59,12 @@ class FrpcForegroundService : Service() {
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
+    private val _logLines = MutableStateFlow<List<String>>(emptyList())
+    val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
+
     override fun onCreate() {
         super.onCreate()
-        frpcProcess = FrpcProcess(this)
+        frppcProcess = FrppcProcess(this)
         createNotificationChannel()
         try {
             startForeground(NOTIFICATION_ID, buildNotification("Initializing..."))
@@ -64,8 +79,8 @@ class FrpcForegroundService : Service() {
                 val masterUrl = intent.getStringExtra(EXTRA_MASTER_URL) ?: return START_NOT_STICKY
                 val username = intent.getStringExtra(EXTRA_USERNAME) ?: return START_NOT_STICKY
                 val password = intent.getStringExtra(EXTRA_PASSWORD) ?: return START_NOT_STICKY
-                val clientId = intent.getStringExtra(EXTRA_CLIENT_ID) ?: return START_NOT_STICKY
-                startEngine(masterUrl, username, password, clientId)
+                val clientName = intent.getStringExtra(EXTRA_CLIENT_NAME) ?: return START_NOT_STICKY
+                startEngine(masterUrl, username, password, clientName)
             }
             ACTION_STOP -> {
                 stopEngine()
@@ -86,76 +101,85 @@ class FrpcForegroundService : Service() {
     private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
         scope.launch {
             try {
-            _status.value = "Connecting..."
-            updateNotification("Connecting to $masterUrl")
+                _status.value = "Extracting binary..."
+                updateNotification("Preparing frppc...")
 
-            // 1. Extract frpc binary
-            val binary = frpcProcess.extractBinary()
-            if (binary == null) {
-                _status.value = "Error: binary extraction failed"
-                _running.value = false
-                updateNotification("Binary extraction failed")
-                return@launch
-            }
+                // 1. Extract frppc binary
+                val binary = frppcProcess.extractBinary()
+                if (binary == null) {
+                    error("Binary extraction failed")
+                    return@launch
+                }
 
-            // 2. Login to master
-            val api = MasterApi(masterUrl.trimEnd('/'))
-            _status.value = "Logging in..."
-            val loginResult = api.login(username, password)
-            if (!loginResult.success) {
-                _status.value = "Error: ${loginResult.error}"
-                _running.value = false
-                updateNotification("Login failed")
-                return@launch
-            }
-            Log.i(TAG, "Login successful")
+                // 2. Login to master REST API
+                val api = MasterApi(masterUrl.trimEnd('/'))
+                _status.value = "Logging in..."
+                updateNotification("Authenticating...")
+                val loginResult = api.login(username, password)
+                if (!loginResult.success) {
+                    error("Login failed: ${loginResult.error}")
+                    return@launch
+                }
+                Log.i(TAG, "Login successful")
 
-            // 3. Get client config from master
-            _status.value = "Looking up client..."
-            updateNotification("Looking up client $clientName")
-            val configResult = api.getClientConfig(clientName)
-            if (!configResult.success) {
-                _status.value = "Error: ${configResult.error}"
-                _running.value = false
-                updateNotification("Client config failed")
-                return@launch
-            }
+                // 3. Get or create client. Try GetClient first — if the client
+                //    already exists (e.g. from a previous session), we get its
+                //    secret directly. If not, InitClient creates a new one.
+                _status.value = "Looking up client..."
+                updateNotification("Looking up $clientName...")
 
-            val clientInfo = configResult.clientInfo!!
-            val configJson = clientInfo.configJson
-            if (configJson.isNullOrBlank()) {
-                _status.value = "Client '${clientInfo.id}' has no config"
-                _running.value = false
-                updateNotification("Client has no proxy config assigned")
-                Log.w(TAG, "Client ${clientInfo.id} has no proxy config")
-                return@launch
-            }
+                var clientId: String
+                var secret: String
 
-            Log.i(TAG, "Got config for client: ${clientInfo.id}")
+                val existing = api.getClientConfig(clientName)
+                if (existing.success && existing.clientInfo?.secret != null) {
+                    clientId = existing.clientInfo.id
+                    secret = existing.clientInfo.secret!!
+                    Log.i(TAG, "Found existing client: $clientId")
+                } else {
+                    // Client doesn't exist yet — create it
+                    _status.value = "Registering client..."
+                    updateNotification("Registering $clientName...")
+                    val initResult = api.initClient(clientName)
+                    if (!initResult.success) {
+                        error("Init failed: ${initResult.error}")
+                        return@launch
+                    }
+                    clientId = initResult.clientId!!
+                    Log.i(TAG, "Client created: $clientId")
 
-            // 4. Write config file
-            val configFile = frpcProcess.writeConfig(configJson)
-            if (configFile == null) {
-                _status.value = "Error: cannot write config"
-                _running.value = false
-                updateNotification("Config write failed")
-                return@launch
-            }
+                    // Get the secret for the newly created client
+                    _status.value = "Getting credentials..."
+                    updateNotification("Retrieving client secret...")
+                    val newInfo = api.getClientConfig(clientId)
+                    if (!newInfo.success || newInfo.clientInfo?.secret.isNullOrEmpty()) {
+                        error("Cannot get client secret")
+                        return@launch
+                    }
+                    secret = newInfo.clientInfo!!.secret!!
+                }
+                Log.i(TAG, "Using client: $clientId")
 
-            // 5. Start frpc
-            _status.value = "Starting frpc..."
-            updateNotification("Starting tunnels...")
-            val started = frpcProcess.start(binary, configFile)
-            if (started) {
-                _status.value = "Running"
-                _running.value = true
-                updateNotification("Tunnels active")
-                Log.i(TAG, "frpc started successfully")
-            } else {
-                _status.value = "Error: frpc failed to start"
-                _running.value = false
-                updateNotification("Start failed")
-            }
+                // 4. Build RPC URL (convert http:// to ws://, https:// to wss://)
+                val rpcUrl = masterUrl.trimEnd('/')
+                    .replace("http://", "ws://")
+                    .replace("https://", "wss://")
+
+                // 5. Start frppc subprocess
+                _status.value = "Starting frppc..."
+                updateNotification("Connecting to master...")
+                val started = frppcProcess.start(binary, clientId, secret, rpcUrl)
+                if (started) {
+                    _status.value = "Connected"
+                    _running.value = true
+                    updateNotification("Connected to master")
+                    Log.i(TAG, "frppc started successfully")
+
+                    // Start polling log output
+                    launchLogPoller()
+                } else {
+                    error("frppc failed to start")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Engine crashed", e)
                 _status.value = "Error: ${e.message}"
@@ -165,10 +189,27 @@ class FrpcForegroundService : Service() {
         }
     }
 
+    private fun launchLogPoller() {
+        scope.launch {
+            while (_running.value) {
+                _logLines.value = frppcProcess.logLines
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    private fun error(msg: String) {
+        _status.value = "Error: $msg"
+        _running.value = false
+        updateNotification("Error: $msg")
+        Log.e(TAG, msg)
+    }
+
     private fun stopEngine() {
-        frpcProcess.stop()
+        frppcProcess.stop()
         _status.value = "Stopped"
         _running.value = false
+        _logLines.value = emptyList()
         updateNotification("Stopped")
     }
 

@@ -36,15 +36,30 @@ class FrppcProcess(private val context: Context) {
     val logLines: List<String> get() = synchronized(logBuffer) { logBuffer.toList() }
 
     /**
-     * Extract the frppc binary from assets to an executable location.
+     * Locate or extract the frppc binary.
      *
-     * Android 10+ mounts /data/data/<pkg>/files/ as noexec, preventing
-     * direct binary execution. We use getDir("native", MODE_PRIVATE)
-     * which creates /data/data/<pkg>/app_native/ — this directory is
-     * often on an exec-enabled filesystem.
+     * Priority:
+     * 1. Native library directory — the APK's lib/arm64-v8a/libfrppc.so is
+     *    extracted here by the package manager at install time. This directory
+     *    is always exec-enabled (Android needs it for loading system .so files).
+     * 2. app_native/ via getDir("native") — fallback for older APKs.
+     * 3. assets/ — last resort extraction.
      */
     fun extractBinary(): File? {
-        // Use getDir to create an app-private directory that supports exec
+        // 1. Native library directory (always exec-enabled on Android 10+)
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        if (nativeLibDir != null) {
+            val nativeBinary = File(nativeLibDir, "libfrppc.so")
+            if (nativeBinary.exists()) {
+                if (!nativeBinary.canExecute()) {
+                    nativeBinary.setExecutable(true)
+                }
+                Log.i(TAG, "Using native library binary: ${nativeBinary.absolutePath}")
+                return nativeBinary
+            }
+        }
+
+        // 2. app_native/ fallback (may be noexec on some devices)
         val binDir = context.getDir("native", Context.MODE_PRIVATE)
         val binary = File(binDir, BINARY_NAME)
         if (binary.exists() && binary.canExecute()) {
@@ -52,17 +67,16 @@ class FrppcProcess(private val context: Context) {
             return binary
         }
 
+        // 3. Extract from assets
         try {
-            // Clean up old copies in filesDir if present
             File(context.filesDir, BINARY_NAME).delete()
-
             context.assets.open(BINARY_NAME).use { input ->
                 FileOutputStream(binary).use { output ->
                     input.copyTo(output)
                 }
             }
             binary.setExecutable(true)
-            Log.i(TAG, "Binary extracted: ${binary.absolutePath} (size=${binary.length()})")
+            Log.i(TAG, "Binary extracted to ${binary.absolutePath} (size=${binary.length()})")
             return binary
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract binary: ${e.message}", e)

@@ -45,6 +45,14 @@ jobs:
           file android/app/src/main/assets/frppc
           ls -lh android/app/src/main/assets/frppc
 
+      - name: Package frppc as native library (for exec on Android 10+)
+        working-directory: android-app
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp android/app/src/main/assets/frppc android/app/src/main/jniLibs/arm64-v8a/libfrppc.so
+          echo "=== Native lib ==="
+          ls -lh android/app/src/main/jniLibs/arm64-v8a/libfrppc.so
+
       - name: Upload build logs
         if: success() || failure()
         uses: actions/upload-artifact@v4

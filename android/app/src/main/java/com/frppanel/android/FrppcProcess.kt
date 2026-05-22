@@ -8,6 +8,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStreamReader
 
+data class StartResult(val success: Boolean, val error: String? = null)
+
 /**
  * Manages the frppc (frp-panel client) subprocess.
  *
@@ -156,8 +158,6 @@ class FrppcProcess(private val context: Context) {
             return StartResult(false, "Process error: ${e.message}")
         }
     }
-
-    data class StartStartResult(val success: Boolean, val error: String? = null)
 
     /**
      * Stop the frppc process gracefully (SIGTERM).

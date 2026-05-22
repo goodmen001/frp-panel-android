@@ -161,9 +161,10 @@ class FrpcForegroundService : Service() {
                 Log.i(TAG, "Using client: $clientId")
 
                 // 4. Build RPC URL (convert http:// to ws://, https:// to wss://)
+                // Server WebSocket gRPC endpoint is at /wsgrpc
                 val rpcUrl = masterUrl.trimEnd('/')
                     .replace("http://", "ws://")
-                    .replace("https://", "wss://")
+                    .replace("https://", "wss://") + "/wsgrpc"
 
                 // 5. Start frppc subprocess
                 _status.value = "Starting frppc..."

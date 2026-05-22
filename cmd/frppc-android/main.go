@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -631,11 +632,27 @@ func (n *nopLogger) Infof(format string, args ...interface{})  {}
 func (n *nopLogger) Errorf(format string, args ...interface{}) {}
 func (n *nopLogger) Tracef(format string, args ...interface{}) {}
 
+// normalizeRPCURL ensures the WebSocket gRPC URL includes the /wsgrpc path.
+// The frp-panel master mounts the gRPC WebSocket handler at /wsgrpc.
+// If the URL already has a path (not just "/"), it is left unchanged.
+func normalizeRPCURL(url string) string {
+	if url == "" {
+		return url
+	}
+	// If the URL already contains a non-empty path (other than bare "/"), return as-is.
+	if strings.Contains(url, "/wsgrpc") {
+		return url
+	}
+	// Strip trailing slash and append /wsgrpc
+	url = strings.TrimRight(url, "/")
+	return url + "/wsgrpc"
+}
+
 func main() {
 	app := newClientApp()
 	app.clientID = os.Getenv("CLIENT_ID")
 	app.clientSecret = os.Getenv("CLIENT_SECRET")
-	app.rpcURL = os.Getenv("CLIENT_RPC_URL")
+	app.rpcURL = normalizeRPCURL(os.Getenv("CLIENT_RPC_URL"))
 	tlsRPC := os.Getenv("CLIENT_TLS_RPC")
 	app.skipTLSVerify = tlsRPC != "true" && tlsRPC != "1"
 

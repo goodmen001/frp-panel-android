@@ -5,6 +5,7 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStreamReader
 
 /**
@@ -68,11 +69,27 @@ class FrppcProcess(private val context: Context) {
      * @param clientId The full client ID (e.g. "admin.c.myandroid")
      * @param clientSecret The client secret from the master
      * @param rpcUrl The master RPC URL (ws://host:port, derived from master HTTP URL)
+     * @return Result with success status and error message on failure
      */
-    fun start(binary: File, clientId: String, clientSecret: String, rpcUrl: String): Boolean {
+    fun start(binary: File, clientId: String, clientSecret: String, rpcUrl: String): StartResult {
         if (running) {
             Log.w(TAG, "Already running")
-            return false
+            return StartResult(false, "Already running")
+        }
+
+        // Check binary
+        if (!binary.exists()) {
+            return StartResult(false, "Binary not found: ${binary.absolutePath}")
+        }
+        val size = binary.length()
+        if (size == 0L) {
+            return StartResult(false, "Binary is empty")
+        }
+        Log.i(TAG, "Binary size: $size bytes at ${binary.absolutePath}")
+
+        // Ensure executable
+        if (!binary.canExecute()) {
+            binary.setExecutable(true)
         }
 
         try {
@@ -89,7 +106,18 @@ class FrppcProcess(private val context: Context) {
                 "CLIENT_TLS_INSECURE_SKIP_VERIFY" to "true"
             ))
 
-            process = pb.start()
+            process = try {
+                pb.start()
+            } catch (e: IOException) {
+                // Android 10+ may block direct exec from filesDir (noexec mount).
+                // Fallback: use "sh -c" to run the binary via shell.
+                Log.w(TAG, "Direct exec failed (${e.message}), trying shell fallback")
+                ProcessBuilder("sh", "-c", binary.absolutePath).apply {
+                    directory(context.filesDir)
+                    redirectErrorStream(true)
+                    environment().putAll(pb.environment())
+                }.start()
+            }
             running = true
             Log.i(TAG, "frppc process started (id=$clientId)")
 
@@ -121,13 +149,15 @@ class FrppcProcess(private val context: Context) {
                 thread.start()
             }
 
-            return true
+            return StartResult(true)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start frppc: ${e.message}", e)
             running = false
-            return false
+            return StartResult(false, "Process error: ${e.message}")
         }
     }
+
+    data class StartStartResult(val success: Boolean, val error: String? = null)
 
     /**
      * Stop the frppc process gracefully (SIGTERM).

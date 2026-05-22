@@ -168,8 +168,8 @@ class FrpcForegroundService : Service() {
                 // 5. Start frppc subprocess
                 _status.value = "Starting frppc..."
                 updateNotification("Connecting to master...")
-                val started = frppcProcess.start(binary, clientId, secret, rpcUrl)
-                if (started) {
+                val result = frppcProcess.start(binary, clientId, secret, rpcUrl)
+                if (result.success) {
                     _status.value = "Connected"
                     _running.value = true
                     updateNotification("Connected to master")
@@ -178,7 +178,7 @@ class FrpcForegroundService : Service() {
                     // Start polling log output
                     launchLogPoller()
                 } else {
-                    error("frppc failed to start")
+                    error("frppc failed to start: ${result.error}")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Engine crashed", e)

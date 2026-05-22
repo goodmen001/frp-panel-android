@@ -175,7 +175,7 @@ type clientApp struct {
 
 	tunnels *tunnelManager
 
-	masterCli atomic.Value // stores pb.MasterClient
+	masterCliValue atomic.Value // stores pb.MasterClient
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -412,12 +412,12 @@ func (a *clientApp) pullAndApplyConfig() {
 }
 
 func (a *clientApp) masterCli() pb.MasterClient {
-	cli, _ := a.masterCli.Load().(pb.MasterClient)
+	cli, _ := a.masterCliValue.Load().(pb.MasterClient)
 	return cli
 }
 
 func (a *clientApp) setMasterCli(cli pb.MasterClient) {
-	a.masterCli.Store(cli)
+	a.masterCliValue.Store(cli)
 }
 
 // --- Server message handlers ---

@@ -1,11 +1,11 @@
 package com.frppanel.android
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.io.InputStreamReader
 
 data class StartResult(val success: Boolean, val error: String? = null)
@@ -18,7 +18,10 @@ data class StartResult(val success: Boolean, val error: String? = null)
  * library in-process when config is received from the master.
  *
  * The binary is bundled in APK assets/ and extracted on first run.
- * Configuration is passed via environment variables.
+ * On Android 10+, /data/data/<pkg>/ is mounted noexec, so direct
+ * execution fails. We fall back to running via /system/bin/linker64
+ * which loads the binary through the dynamic linker and bypasses the
+ * noexec restriction.
  */
 class FrppcProcess(private val context: Context) {
 
@@ -36,47 +39,23 @@ class FrppcProcess(private val context: Context) {
     val logLines: List<String> get() = synchronized(logBuffer) { logBuffer.toList() }
 
     /**
-     * Locate or extract the frppc binary.
-     *
-     * Priority:
-     * 1. Native library directory — the APK's lib/arm64-v8a/libfrppc.so is
-     *    extracted here by the package manager at install time. This directory
-     *    is always exec-enabled (Android needs it for loading system .so files).
-     * 2. app_native/ via getDir("native") — fallback for older APKs.
-     * 3. assets/ — last resort extraction.
+     * Extract the frppc binary from assets to the app's private directory.
      */
     fun extractBinary(): File? {
-        // 1. Native library directory (always exec-enabled on Android 10+)
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
-        if (nativeLibDir != null) {
-            val nativeBinary = File(nativeLibDir, "libfrppc.so")
-            if (nativeBinary.exists()) {
-                if (!nativeBinary.canExecute()) {
-                    nativeBinary.setExecutable(true)
-                }
-                Log.i(TAG, "Using native library binary: ${nativeBinary.absolutePath}")
-                return nativeBinary
-            }
-        }
-
-        // 2. app_native/ fallback (may be noexec on some devices)
-        val binDir = context.getDir("native", Context.MODE_PRIVATE)
-        val binary = File(binDir, BINARY_NAME)
-        if (binary.exists() && binary.canExecute()) {
-            Log.i(TAG, "Binary already extracted: ${binary.absolutePath}")
+        val binary = File(context.filesDir, BINARY_NAME)
+        if (binary.exists() && binary.length() > 0L) {
+            Log.i(TAG, "Binary already exists: ${binary.absolutePath} (size=${binary.length()})")
             return binary
         }
 
-        // 3. Extract from assets
         try {
-            File(context.filesDir, BINARY_NAME).delete()
             context.assets.open(BINARY_NAME).use { input ->
                 FileOutputStream(binary).use { output ->
                     input.copyTo(output)
                 }
             }
             binary.setExecutable(true)
-            Log.i(TAG, "Binary extracted to ${binary.absolutePath} (size=${binary.length()})")
+            Log.i(TAG, "Binary extracted: ${binary.absolutePath} (size=${binary.length()})")
             return binary
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract binary: ${e.message}", e)
@@ -87,15 +66,10 @@ class FrppcProcess(private val context: Context) {
     /**
      * Start frppc as a subprocess with the given credentials.
      *
-     * frppc connects to the master via WebSocket/gRPC, registers the client,
-     * maintains the persistent connection, and runs frpc in-process when
-     * the master sends a config.
-     *
-     * @param binary The frppc binary file
-     * @param clientId The full client ID (e.g. "admin.c.myandroid")
-     * @param clientSecret The client secret from the master
-     * @param rpcUrl The master RPC URL (ws://host:port, derived from master HTTP URL)
-     * @return Result with success status and error message on failure
+     * Direct execution is tried first. On Android 10+ the app data
+     * directory is often mounted noexec, causing error=13. When that
+     * happens we retry via /system/bin/linker64 which loads the ELF
+     * through the dynamic linker, bypassing the noexec restriction.
      */
     fun start(binary: File, clientId: String, clientSecret: String, rpcUrl: String): StartResult {
         if (running) {
@@ -103,7 +77,6 @@ class FrppcProcess(private val context: Context) {
             return StartResult(false, "Already running")
         }
 
-        // Check binary
         if (!binary.exists()) {
             return StartResult(false, "Binary not found: ${binary.absolutePath}")
         }
@@ -113,69 +86,108 @@ class FrppcProcess(private val context: Context) {
         }
         Log.i(TAG, "Binary size: $size bytes at ${binary.absolutePath}")
 
-        // Ensure executable
         if (!binary.canExecute()) {
             binary.setExecutable(true)
         }
 
+        // Try direct execution first
         try {
             val pb = ProcessBuilder(binary.absolutePath)
-            pb.directory(context.filesDir)
-            pb.redirectErrorStream(true)
-
-            // Pass config via environment variables (frppc reads CLIENT_* env vars)
-            pb.environment().putAll(mapOf(
-                "CLIENT_ID" to clientId,
-                "CLIENT_SECRET" to clientSecret,
-                "CLIENT_RPC_URL" to rpcUrl,
-                "CLIENT_TLS_RPC" to "false",
-                "CLIENT_TLS_INSECURE_SKIP_VERIFY" to "true"
-            ))
-
+            configureProcess(pb, clientId, clientSecret, rpcUrl)
             process = pb.start()
             running = true
-            Log.i(TAG, "frppc process started (id=$clientId)")
-
-            // Read combined stdout+stderr in background
-            outputReaderThread = Thread {
-                try {
-                    val reader = BufferedReader(InputStreamReader(process!!.inputStream))
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        val logLine = line!!
-                        Log.d(TAG, "frppc: $logLine")
-                        synchronized(logBuffer) {
-                            logBuffer.add(logLine)
-                            if (logBuffer.size > MAX_LOG_LINES) {
-                                logBuffer.removeAt(0)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    if (running) {
-                        Log.w(TAG, "Output reader ended: ${e.message}")
-                    }
-                }
-                running = false
-                Log.i(TAG, "frppc process ended")
-            }.also { thread ->
-                thread.isDaemon = true
-                thread.name = "frppc-stdout"
-                thread.start()
-            }
-
+            Log.i(TAG, "frppc process started (direct, id=$clientId)")
+            startOutputReader()
             return StartResult(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start frppc: ${e.message}", e)
+            val msg = e.message ?: ""
+            if (msg.contains("error=13") || msg.contains("EACCES") || msg.contains("permission denied")) {
+                Log.w(TAG, "Direct exec failed (noexec), retrying via linker64: $msg")
+                return startViaLinker(binary, clientId, clientSecret, rpcUrl)
+            }
+            Log.e(TAG, "Failed to start frppc: $msg", e)
             running = false
-            return StartResult(false, "Process error: ${e.message}")
+            return StartResult(false, "Process error: $msg")
         }
     }
 
     /**
-     * Stop the frppc process gracefully (SIGTERM).
-     * frppc will clean up the in-process frpc and disconnect from the master.
+     * Retry execution via the Android dynamic linker.
+     *
+     * execve("/system/bin/linker64", ["linker64", "/path/to/binary"])
+     * executes the linker (on exec-enabled /system/) and the linker
+     * reads the binary via open+mmap rather than execve.
      */
+    private fun startViaLinker(
+        binary: File, clientId: String, clientSecret: String, rpcUrl: String
+    ): StartResult {
+        val linker = if (Build.SUPPORTED_64_BIT_ABIS.isNotEmpty()) {
+            "/system/bin/linker64"
+        } else {
+            "/system/bin/linker"
+        }
+
+        val linkerFile = File(linker)
+        if (!linkerFile.exists()) {
+            return StartResult(false, "Linker not found: $linker")
+        }
+
+        try {
+            val pb = ProcessBuilder(linker, binary.absolutePath)
+            configureProcess(pb, clientId, clientSecret, rpcUrl)
+            process = pb.start()
+            running = true
+            Log.i(TAG, "frppc process started (linker64, id=$clientId)")
+            startOutputReader()
+            return StartResult(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Linker exec failed: ${e.message}", e)
+            running = false
+            return StartResult(false, "Linker exec error: ${e.message}")
+        }
+    }
+
+    private fun configureProcess(pb: ProcessBuilder, clientId: String, clientSecret: String, rpcUrl: String) {
+        pb.directory(context.filesDir)
+        pb.redirectErrorStream(true)
+        pb.environment().putAll(mapOf(
+            "CLIENT_ID" to clientId,
+            "CLIENT_SECRET" to clientSecret,
+            "CLIENT_RPC_URL" to rpcUrl,
+            "CLIENT_TLS_RPC" to "false",
+            "CLIENT_TLS_INSECURE_SKIP_VERIFY" to "true"
+        ))
+    }
+
+    private fun startOutputReader() {
+        outputReaderThread = Thread {
+            try {
+                val reader = BufferedReader(InputStreamReader(process!!.inputStream))
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val logLine = line!!
+                    Log.d(TAG, "frppc: $logLine")
+                    synchronized(logBuffer) {
+                        logBuffer.add(logLine)
+                        if (logBuffer.size > MAX_LOG_LINES) {
+                            logBuffer.removeAt(0)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (running) {
+                    Log.w(TAG, "Output reader ended: ${e.message}")
+                }
+            }
+            running = false
+            Log.i(TAG, "frppc process ended")
+        }.also { thread ->
+            thread.isDaemon = true
+            thread.name = "frppc-stdout"
+            thread.start()
+        }
+    }
+
     fun stop() {
         val proc = process ?: return
         running = false
@@ -190,13 +202,8 @@ class FrppcProcess(private val context: Context) {
 
     fun isRunning(): Boolean = running && (process?.isAlive == true)
 
-    /**
-     * Clean up the binary file.
-     */
     fun cleanup() {
         stop()
         File(context.filesDir, BINARY_NAME).delete()
-        File(context.getDir("native", Context.MODE_PRIVATE), BINARY_NAME).delete()
-        Log.i(TAG, "Cleanup complete")
     }
 }

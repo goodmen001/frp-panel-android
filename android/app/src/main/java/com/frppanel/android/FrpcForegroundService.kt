@@ -42,6 +42,7 @@ class FrpcForegroundService : Service() {
         const val EXTRA_USERNAME = "username"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_CLIENT_NAME = "client_name"
+        const val EXTRA_RPC_URL = "rpc_url"
         private const val TAG = "FrpcForegroundService"
     }
 
@@ -80,7 +81,8 @@ class FrpcForegroundService : Service() {
                 val username = intent.getStringExtra(EXTRA_USERNAME) ?: return START_NOT_STICKY
                 val password = intent.getStringExtra(EXTRA_PASSWORD) ?: return START_NOT_STICKY
                 val clientName = intent.getStringExtra(EXTRA_CLIENT_NAME) ?: return START_NOT_STICKY
-                startEngine(masterUrl, username, password, clientName)
+                val rpcUrl = intent.getStringExtra(EXTRA_RPC_URL)
+                startEngine(masterUrl, username, password, clientName, rpcUrl)
             }
             ACTION_STOP -> {
                 stopEngine()
@@ -98,7 +100,7 @@ class FrpcForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
+    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String, rpcUrl: String? = null) {
         scope.launch {
             try {
                 _status.value = "Extracting binary..."
@@ -160,16 +162,19 @@ class FrpcForegroundService : Service() {
                 }
                 Log.i(TAG, "Using client: $clientId")
 
-                // 4. Build RPC URL (convert http:// to ws://, https:// to wss://)
-                // Server WebSocket gRPC endpoint is at /wsgrpc
-                val rpcUrl = masterUrl.trimEnd('/')
-                    .replace("http://", "ws://")
-                    .replace("https://", "wss://") + "/wsgrpc"
+                // 4. Build RPC URL (use provided or derive from master URL)
+                val finalRpcUrl = if (!rpcUrl.isNullOrBlank()) {
+                    rpcUrl.trimEnd('/')
+                } else {
+                    masterUrl.trimEnd('/')
+                        .replace("http://", "ws://")
+                        .replace("https://", "wss://") + "/wsgrpc"
+                }
 
                 // 5. Start frppc subprocess
                 _status.value = "Starting frppc..."
                 updateNotification("Connecting to master...")
-                val result = frppcProcess.start(binary, clientId, secret, rpcUrl)
+                val result = frppcProcess.start(binary, clientId, secret, finalRpcUrl)
                 if (result.success) {
                     _status.value = "Connected"
                     _running.value = true

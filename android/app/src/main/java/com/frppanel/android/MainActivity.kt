@@ -68,8 +68,8 @@ class MainActivity : ComponentActivity() {
                 colorScheme = darkColorScheme()
             ) {
                 FrpcPanelUI(
-                    onStart = { url, user, pass, cid ->
-                        startEngine(url, user, pass, cid)
+                    onStart = { url, user, pass, cid, rpc ->
+                        startEngine(url, user, pass, cid, rpc)
                     },
                     onStop = { stopEngine() },
                     service = boundService
@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String) {
+    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String, rpcUrl: String = "") {
         Toast.makeText(this, "Starting...", Toast.LENGTH_SHORT).show()
         val intent = Intent(this, FrpcForegroundService::class.java).apply {
             action = FrpcForegroundService.ACTION_START
@@ -103,7 +103,9 @@ class MainActivity : ComponentActivity() {
             putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
             putExtra(FrpcForegroundService.EXTRA_PASSWORD, password)
             putExtra(FrpcForegroundService.EXTRA_CLIENT_NAME, clientName)
-        }
+            if (rpcUrl.isNotBlank()) {
+                putExtra(FrpcForegroundService.EXTRA_RPC_URL, rpcUrl)
+            }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
@@ -121,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun FrpcPanelUI(
-    onStart: (String, String, String, String) -> Unit,
+    onStart: (String, String, String, String, String) -> Unit,
     onStop: () -> Unit,
     service: FrpcForegroundService?
 ) {
@@ -129,6 +131,7 @@ fun FrpcPanelUI(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var clientName by remember { mutableStateOf("") }
+    var rpcUrl by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
     var logLines by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -217,6 +220,19 @@ fun FrpcPanelUI(
             modifier = Modifier.fillMaxWidth()
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = rpcUrl,
+            onValueChange = { rpcUrl = it },
+            label = { Text("RPC URL (optional)") },
+            placeholder = { Text("wss://grpc.ekxuexi.cn:3005") },
+            singleLine = true,
+            enabled = !isRunning,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+        )
+
         Spacer(modifier = Modifier.height(16.dp))
 
         // Status card
@@ -291,10 +307,9 @@ fun FrpcPanelUI(
                     ) {
                         onStart(
                             masterUrl.trim(), username.trim(),
-                            password.trim(), clientName.trim()
+                            password.trim(), clientName.trim(),
+                            rpcUrl.trim()
                         )
-                    } else {
-                        // no-op
                     }
                 },
                 modifier = Modifier.weight(1f),

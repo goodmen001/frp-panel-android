@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
             if (rpcUrl.isNotBlank()) {
                 putExtra(FrpcForegroundService.EXTRA_RPC_URL, rpcUrl)
             }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {

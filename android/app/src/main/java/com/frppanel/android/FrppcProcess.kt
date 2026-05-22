@@ -36,23 +36,33 @@ class FrppcProcess(private val context: Context) {
     val logLines: List<String> get() = synchronized(logBuffer) { logBuffer.toList() }
 
     /**
-     * Extract the frppc binary from assets to internal storage.
+     * Extract the frppc binary from assets to an executable location.
+     *
+     * Android 10+ mounts /data/data/<pkg>/files/ as noexec, preventing
+     * direct binary execution. We use getDir("native", MODE_PRIVATE)
+     * which creates /data/data/<pkg>/app_native/ — this directory is
+     * often on an exec-enabled filesystem.
      */
     fun extractBinary(): File? {
-        val binary = File(context.filesDir, BINARY_NAME)
+        // Use getDir to create an app-private directory that supports exec
+        val binDir = context.getDir("native", Context.MODE_PRIVATE)
+        val binary = File(binDir, BINARY_NAME)
         if (binary.exists() && binary.canExecute()) {
             Log.i(TAG, "Binary already extracted: ${binary.absolutePath}")
             return binary
         }
 
         try {
+            // Clean up old copies in filesDir if present
+            File(context.filesDir, BINARY_NAME).delete()
+
             context.assets.open(BINARY_NAME).use { input ->
                 FileOutputStream(binary).use { output ->
                     input.copyTo(output)
                 }
             }
             binary.setExecutable(true)
-            Log.i(TAG, "Binary extracted: ${binary.absolutePath}")
+            Log.i(TAG, "Binary extracted: ${binary.absolutePath} (size=${binary.length()})")
             return binary
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract binary: ${e.message}", e)
@@ -108,18 +118,7 @@ class FrppcProcess(private val context: Context) {
                 "CLIENT_TLS_INSECURE_SKIP_VERIFY" to "true"
             ))
 
-            process = try {
-                pb.start()
-            } catch (e: IOException) {
-                // Android 10+ may block direct exec from filesDir (noexec mount).
-                // Fallback: use "sh -c" to run the binary via shell.
-                Log.w(TAG, "Direct exec failed (${e.message}), trying shell fallback")
-                ProcessBuilder("sh", "-c", binary.absolutePath).apply {
-                    directory(context.filesDir)
-                    redirectErrorStream(true)
-                    environment().putAll(pb.environment())
-                }.start()
-            }
+            process = pb.start()
             running = true
             Log.i(TAG, "frppc process started (id=$clientId)")
 
@@ -183,6 +182,7 @@ class FrppcProcess(private val context: Context) {
     fun cleanup() {
         stop()
         File(context.filesDir, BINARY_NAME).delete()
+        File(context.getDir("native", Context.MODE_PRIVATE), BINARY_NAME).delete()
         Log.i(TAG, "Cleanup complete")
     }
 }

@@ -23,13 +23,14 @@ import kotlinx.coroutines.launch
  * Foreground service that manages the frppc (frp-panel client) daemon.
  *
  * frppc is the Go client daemon that:
- * 1. Connects to the frp-panel master via WebSocket/gRPC
- * 2. Registers this device as a client
+ * 1. Connects to the frp-panel master via WebSocket/gRPC using the RPC URL
+ * 2. Registers this device as a client using the pre-assigned client ID and secret
  * 3. Maintains a persistent bidirectional connection
- * 4. Runs the embedded frpc library in-process when the master assigns config
+ * 4. Periodically pulls and applies tunnel configurations
+ * 5. Runs the embedded frpc library in-process when the master assigns config
  *
- * This service handles authentication against the master's REST API,
- * retrieves the client credentials, and manages the frppc subprocess lifecycle.
+ * Unlike the web UI admin flow, this connects as a client directly using
+ * pre-allocated credentials (similar to `frppc client -i <id> -s <secret>`).
  */
 class FrpcForegroundService : Service() {
 
@@ -38,11 +39,10 @@ class FrpcForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.frppanel.android.START"
         const val ACTION_STOP = "com.frppanel.android.STOP"
-        const val EXTRA_MASTER_URL = "master_url"
-        const val EXTRA_USERNAME = "username"
-        const val EXTRA_PASSWORD = "password"
-        const val EXTRA_CLIENT_NAME = "client_name"
+        const val EXTRA_CLIENT_ID = "client_id"
+        const val EXTRA_CLIENT_SECRET = "client_secret"
         const val EXTRA_RPC_URL = "rpc_url"
+        const val EXTRA_API_URL = "api_url"
         private const val TAG = "FrpcForegroundService"
     }
 
@@ -77,12 +77,11 @@ class FrpcForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val masterUrl = intent.getStringExtra(EXTRA_MASTER_URL) ?: return START_NOT_STICKY
-                val username = intent.getStringExtra(EXTRA_USERNAME) ?: return START_NOT_STICKY
-                val password = intent.getStringExtra(EXTRA_PASSWORD) ?: return START_NOT_STICKY
-                val clientName = intent.getStringExtra(EXTRA_CLIENT_NAME) ?: return START_NOT_STICKY
-                val rpcUrl = intent.getStringExtra(EXTRA_RPC_URL)
-                startEngine(masterUrl, username, password, clientName, rpcUrl)
+                val clientId = intent.getStringExtra(EXTRA_CLIENT_ID) ?: return START_NOT_STICKY
+                val clientSecret = intent.getStringExtra(EXTRA_CLIENT_SECRET) ?: return START_NOT_STICKY
+                val rpcUrl = intent.getStringExtra(EXTRA_RPC_URL) ?: return START_NOT_STICKY
+                val apiUrl = intent.getStringExtra(EXTRA_API_URL)
+                startEngine(clientId, clientSecret, rpcUrl, apiUrl)
             }
             ACTION_STOP -> {
                 stopEngine()
@@ -100,7 +99,7 @@ class FrpcForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String, rpcUrl: String? = null) {
+    private fun startEngine(clientId: String, clientSecret: String, rpcUrl: String, apiUrl: String?) {
         scope.launch {
             try {
                 _status.value = "Extracting binary..."
@@ -113,73 +112,24 @@ class FrpcForegroundService : Service() {
                     return@launch
                 }
 
-                // 2. Login to master REST API
-                val api = MasterApi(masterUrl.trimEnd('/'))
-                _status.value = "Logging in..."
-                updateNotification("Authenticating...")
-                val loginResult = api.login(username, password)
-                if (!loginResult.success) {
-                    error("Login failed: ${loginResult.error}")
-                    return@launch
-                }
-                Log.i(TAG, "Login successful")
-
-                // 3. Get or create client. Try GetClient first — if the client
-                //    already exists (e.g. from a previous session), we get its
-                //    secret directly. If not, InitClient creates a new one.
-                _status.value = "Looking up client..."
-                updateNotification("Looking up $clientName...")
-
-                var clientId: String
-                var secret: String
-
-                val existing = api.getClientConfig(clientName)
-                if (existing.success && existing.clientInfo?.secret != null) {
-                    clientId = existing.clientInfo.id
-                    secret = existing.clientInfo.secret!!
-                    Log.i(TAG, "Found existing client: $clientId")
-                } else {
-                    // Client doesn't exist yet — create it
-                    _status.value = "Registering client..."
-                    updateNotification("Registering $clientName...")
-                    val initResult = api.initClient(clientName)
-                    if (!initResult.success) {
-                        error("Init failed: ${initResult.error}")
-                        return@launch
-                    }
-                    clientId = initResult.clientId!!
-                    Log.i(TAG, "Client created: $clientId")
-
-                    // Get the secret for the newly created client
-                    _status.value = "Getting credentials..."
-                    updateNotification("Retrieving client secret...")
-                    val newInfo = api.getClientConfig(clientId)
-                    if (!newInfo.success || newInfo.clientInfo?.secret.isNullOrEmpty()) {
-                        error("Cannot get client secret")
-                        return@launch
-                    }
-                    secret = newInfo.clientInfo!!.secret!!
-                }
-                Log.i(TAG, "Using client: $clientId")
-
-                // 4. Build RPC URL (use provided or derive from master URL)
-                val finalRpcUrl = if (!rpcUrl.isNullOrBlank()) {
-                    rpcUrl.trimEnd('/')
-                } else {
-                    masterUrl.trimEnd('/')
-                        .replace("http://", "ws://")
-                        .replace("https://", "wss://") + "/wsgrpc"
-                }
-
-                // 5. Start frppc subprocess
-                _status.value = "Starting frppc..."
+                // 2. Start frppc with client credentials directly
+                //    (like: frppc client -i <id> -s <secret> --rpc-url <url>)
+                _status.value = "Connecting..."
                 updateNotification("Connecting to master...")
-                val result = frppcProcess.start(binary, clientId, secret, finalRpcUrl)
+
+                val result = frppcProcess.start(
+                    binary = binary,
+                    clientId = clientId,
+                    clientSecret = clientSecret,
+                    rpcUrl = rpcUrl,
+                    apiUrl = apiUrl
+                )
+
                 if (result.success) {
                     _status.value = "Connected"
                     _running.value = true
                     updateNotification("Connected to master")
-                    Log.i(TAG, "frppc started successfully")
+                    Log.i(TAG, "frppc started successfully (id=$clientId)")
 
                     // Start polling log output
                     launchLogPoller()

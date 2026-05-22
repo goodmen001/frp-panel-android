@@ -71,7 +71,7 @@ class FrppcProcess(private val context: Context) {
      * happens we retry via /system/bin/linker64 which loads the ELF
      * through the dynamic linker, bypassing the noexec restriction.
      */
-    fun start(binary: File, clientId: String, clientSecret: String, rpcUrl: String): StartResult {
+    fun start(binary: File, clientId: String, clientSecret: String, rpcUrl: String, apiUrl: String? = null): StartResult {
         if (running) {
             Log.w(TAG, "Already running")
             return StartResult(false, "Already running")
@@ -93,7 +93,7 @@ class FrppcProcess(private val context: Context) {
         // Try direct execution first
         try {
             val pb = ProcessBuilder(binary.absolutePath)
-            configureProcess(pb, clientId, clientSecret, rpcUrl)
+            configureProcess(pb, clientId, clientSecret, rpcUrl, apiUrl)
             process = pb.start()
             running = true
             Log.i(TAG, "frppc process started (direct, id=$clientId)")
@@ -103,7 +103,7 @@ class FrppcProcess(private val context: Context) {
             val msg = e.message ?: ""
             if (msg.contains("error=13") || msg.contains("EACCES") || msg.contains("permission denied")) {
                 Log.w(TAG, "Direct exec failed (noexec), retrying via linker64: $msg")
-                return startViaLinker(binary, clientId, clientSecret, rpcUrl)
+                return startViaLinker(binary, clientId, clientSecret, rpcUrl, apiUrl)
             }
             Log.e(TAG, "Failed to start frppc: $msg", e)
             running = false
@@ -119,7 +119,7 @@ class FrppcProcess(private val context: Context) {
      * reads the binary via open+mmap rather than execve.
      */
     private fun startViaLinker(
-        binary: File, clientId: String, clientSecret: String, rpcUrl: String
+        binary: File, clientId: String, clientSecret: String, rpcUrl: String, apiUrl: String? = null
     ): StartResult {
         val linker = if (Build.SUPPORTED_64_BIT_ABIS.isNotEmpty()) {
             "/system/bin/linker64"
@@ -134,7 +134,7 @@ class FrppcProcess(private val context: Context) {
 
         try {
             val pb = ProcessBuilder(linker, binary.absolutePath)
-            configureProcess(pb, clientId, clientSecret, rpcUrl)
+            configureProcess(pb, clientId, clientSecret, rpcUrl, apiUrl)
             process = pb.start()
             running = true
             Log.i(TAG, "frppc process started (linker64, id=$clientId)")
@@ -147,16 +147,20 @@ class FrppcProcess(private val context: Context) {
         }
     }
 
-    private fun configureProcess(pb: ProcessBuilder, clientId: String, clientSecret: String, rpcUrl: String) {
+    private fun configureProcess(pb: ProcessBuilder, clientId: String, clientSecret: String, rpcUrl: String, apiUrl: String? = null) {
         pb.directory(context.filesDir)
         pb.redirectErrorStream(true)
-        pb.environment().putAll(mapOf(
+        val env = mutableMapOf(
             "CLIENT_ID" to clientId,
             "CLIENT_SECRET" to clientSecret,
             "CLIENT_RPC_URL" to rpcUrl,
             "CLIENT_TLS_RPC" to "false",
             "CLIENT_TLS_INSECURE_SKIP_VERIFY" to "true"
-        ))
+        )
+        if (apiUrl != null) {
+            env["CLIENT_API_URL"] = apiUrl
+        }
+        pb.environment().putAll(env)
     }
 
     private fun startOutputReader() {

@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -97,30 +97,6 @@ func (tm *tunnelManager) createAndStore(
 	return svc, nil
 }
 
-func (tm *tunnelManager) remove(clientID, serverID string) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	k := tm.key(clientID, serverID)
-	if svc, ok := tm.services[k]; ok {
-		svc.Close()
-		delete(tm.services, k)
-		delete(tm.cfgs, k)
-	}
-}
-
-func (tm *tunnelManager) removeClient(clientID string) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	prefix := clientID + "/"
-	for k, svc := range tm.services {
-		if strings.HasPrefix(k, prefix) {
-			svc.Close()
-			delete(tm.services, k)
-			delete(tm.cfgs, k)
-		}
-	}
-}
-
 func (tm *tunnelManager) stopAll() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -198,7 +174,8 @@ type clientApp struct {
 	skipTLSVerify bool
 
 	tunnels *tunnelManager
-	masterCli pb.MasterClient
+
+	masterCli atomic.Value // stores pb.MasterClient
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -211,9 +188,11 @@ func newClientApp() *clientApp {
 	}
 }
 
+// --- Main connection loop ---
+
 func (a *clientApp) run() {
 	a.wg.Add(1)
-	defer a.wg.Done()
+	go a.pollConfigLoop()
 
 	for {
 		select {
@@ -252,9 +231,9 @@ func (a *clientApp) connectAndServe() error {
 	}
 	defer conn.Close()
 
-	a.masterCli = pb.NewMasterClient(conn)
+	a.setMasterCli(pb.NewMasterClient(conn))
 
-	stream, err := a.masterCli.ServerSend(context.Background())
+	stream, err := a.masterCli().ServerSend(context.Background())
 	if err != nil {
 		return fmt.Errorf("server send stream failed: %w", err)
 	}
@@ -341,6 +320,108 @@ func (a *clientApp) register(stream pb.Master_ServerSendClient) error {
 	return errors.New("register timed out")
 }
 
+// --- Config polling ---
+
+func (a *clientApp) pollConfigLoop() {
+	defer a.wg.Done()
+
+	// Wait for first connection (masterCli becomes non-nil)
+	for {
+		if a.masterCli() != nil {
+			break
+		}
+		select {
+		case <-a.stopCh:
+			return
+		case <-time.After(time.Second):
+		}
+	}
+
+	// Initial pull shortly after connection
+	time.Sleep(2 * time.Second)
+	a.pullAndApplyConfig()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case <-ticker.C:
+			a.pullAndApplyConfig()
+		}
+	}
+}
+
+func (a *clientApp) pullAndApplyConfig() {
+	cli := a.masterCli()
+	if cli == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := cli.PullClientConfig(ctx, &pb.PullClientConfigReq{
+		Base: &pb.ClientBase{
+			ClientId:     a.clientID,
+			ClientSecret: a.clientSecret,
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pull config error: %v\n", err)
+		return
+	}
+
+	clientData := resp.GetClient()
+	if clientData == nil {
+		return
+	}
+
+	if clientData.GetStopped() {
+		a.tunnels.stopAll()
+		return
+	}
+
+	configContent := clientData.GetConfig()
+	if len(configContent) == 0 {
+		return
+	}
+
+	cfg, proxyCfgs, visitorCfgs, err := loadClientConfig([]byte(configContent))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load config error: %v\n", err)
+		return
+	}
+
+	serverID := clientData.GetServerId()
+	svc, err := a.tunnels.getOrCreate(a.clientID, serverID, cfg, proxyCfgs, visitorCfgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create service error: %v\n", err)
+		return
+	}
+
+	go func() {
+		fmt.Fprintf(os.Stdout, "starting frpc service from pull config\n")
+		ctx := context.Background()
+		if err := svc.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "frpc service error: %v\n", err)
+		}
+	}()
+}
+
+func (a *clientApp) masterCli() pb.MasterClient {
+	cli, _ := a.masterCli.Load().(pb.MasterClient)
+	return cli
+}
+
+func (a *clientApp) setMasterCli(cli pb.MasterClient) {
+	a.masterCli.Store(cli)
+}
+
+// --- Server message handlers ---
+
 func (a *clientApp) handleServerMessage(req *pb.ServerMessage) *pb.ClientMessage {
 	switch req.Event {
 	case pb.Event_EVENT_UPDATE_FRPC:
@@ -426,29 +507,23 @@ func (a *clientApp) handleUpdateFrpc(req *pb.ServerMessage) *pb.ClientMessage {
 	return okResp("frpc updated")
 }
 
-func (a *clientApp) handleRemoveFrpc(req *pb.ServerMessage) *pb.ClientMessage {
-	removeReq := &pb.RemoveFRPCRequest{}
-	if err := proto.Unmarshal(req.GetData(), removeReq); err != nil {
-		return errorResp("unmarshal RemoveFRPCRequest failed: " + err.Error())
-	}
-	a.tunnels.removeClient(removeReq.GetClientId())
-	return okResp("frpc removed")
-}
-
 func (a *clientApp) handleStartFrpc(req *pb.ServerMessage) *pb.ClientMessage {
 	startReq := &pb.StartFRPCRequest{}
 	if err := proto.Unmarshal(req.GetData(), startReq); err != nil {
 		return errorResp("unmarshal StartFRPCRequest failed: " + err.Error())
 	}
 
-	cid := startReq.GetClientId()
-	if cid == "" {
-		cid = a.clientID
+	fmt.Fprintf(os.Stdout, "pulling config from master for client %s\n", a.clientID)
+
+	cli := a.masterCli()
+	if cli == nil {
+		return errorResp("not connected")
 	}
 
-	// Pull config from master via PullClientConfig RPC
-	fmt.Fprintf(os.Stdout, "pulling config from master for client %s\n", cid)
-	pullResp, err := a.masterCli.PullClientConfig(context.Background(), &pb.PullClientConfigReq{
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	pullResp, err := cli.PullClientConfig(ctx, &pb.PullClientConfigReq{
 		Base: &pb.ClientBase{
 			ClientId:     a.clientID,
 			ClientSecret: a.clientSecret,
@@ -469,13 +544,13 @@ func (a *clientApp) handleStartFrpc(req *pb.ServerMessage) *pb.ClientMessage {
 	}
 
 	serverID := pullResp.GetClient().GetServerId()
-	svc, err := a.tunnels.getOrCreate(cid, serverID, cfg, proxyCfgs, visitorCfgs)
+	svc, err := a.tunnels.getOrCreate(a.clientID, serverID, cfg, proxyCfgs, visitorCfgs)
 	if err != nil {
 		return errorResp("create service failed: " + err.Error())
 	}
 
 	go func() {
-		fmt.Fprintf(os.Stdout, "starting frpc service clientID=%s serverID=%s\n", cid, serverID)
+		fmt.Fprintf(os.Stdout, "starting frpc service clientID=%s serverID=%s\n", a.clientID, serverID)
 		ctx := context.Background()
 		if err := svc.Run(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "frpc service error: %v\n", err)
@@ -486,12 +561,13 @@ func (a *clientApp) handleStartFrpc(req *pb.ServerMessage) *pb.ClientMessage {
 }
 
 func (a *clientApp) handleStopFrpc(req *pb.ServerMessage) *pb.ClientMessage {
-	stopReq := &pb.StopFRPCRequest{}
-	if err := proto.Unmarshal(req.GetData(), stopReq); err != nil {
-		return errorResp("unmarshal StopFRPCRequest failed: " + err.Error())
-	}
 	a.tunnels.stopAll()
 	return okResp("all frpc stopped")
+}
+
+func (a *clientApp) handleRemoveFrpc(req *pb.ServerMessage) *pb.ClientMessage {
+	a.tunnels.stopAll()
+	return okResp("all frpc removed")
 }
 
 func (a *clientApp) handleGetProxyInfo(req *pb.ServerMessage) *pb.ClientMessage {
@@ -500,7 +576,10 @@ func (a *clientApp) handleGetProxyInfo(req *pb.ServerMessage) *pb.ClientMessage 
 		return errorResp("unmarshal GetProxyConfigRequest failed: " + err.Error())
 	}
 
-	k := a.tunnels.key(getReq.GetClientId(), getReq.GetServerId())
+	serverID := getReq.GetServerId()
+	proxyName := getReq.GetName()
+
+	k := a.tunnels.key(a.clientID, serverID)
 	a.tunnels.mu.Lock()
 	svc, ok := a.tunnels.services[k]
 	a.tunnels.mu.Unlock()
@@ -510,9 +589,9 @@ func (a *clientApp) handleGetProxyInfo(req *pb.ServerMessage) *pb.ClientMessage 
 	}
 
 	exporter := svc.StatusExporter()
-	status, ok := exporter.GetProxyStatus(getReq.GetName())
+	status, ok := exporter.GetProxyStatus(proxyName)
 	if !ok {
-		return errorResp("proxy not found: " + getReq.GetName())
+		return errorResp("proxy not found: " + proxyName)
 	}
 
 	resp := &pb.GetProxyConfigResponse{

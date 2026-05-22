@@ -54,7 +54,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
@@ -68,8 +67,8 @@ class MainActivity : ComponentActivity() {
                 colorScheme = darkColorScheme()
             ) {
                 FrpcPanelUI(
-                    onStart = { url, user, pass, cid, rpc ->
-                        startEngine(url, user, pass, cid, rpc)
+                    onStart = { clientId, clientSecret, apiUrl, rpcUrl ->
+                        startEngine(clientId, clientSecret, apiUrl, rpcUrl)
                     },
                     onStop = { stopEngine() },
                     service = boundService
@@ -95,16 +94,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startEngine(masterUrl: String, username: String, password: String, clientName: String, rpcUrl: String = "") {
+    private fun startEngine(clientId: String, clientSecret: String, apiUrl: String = "", rpcUrl: String = "") {
         Toast.makeText(this, "Starting...", Toast.LENGTH_SHORT).show()
         val intent = Intent(this, FrpcForegroundService::class.java).apply {
             action = FrpcForegroundService.ACTION_START
-            putExtra(FrpcForegroundService.EXTRA_MASTER_URL, masterUrl)
-            putExtra(FrpcForegroundService.EXTRA_USERNAME, username)
-            putExtra(FrpcForegroundService.EXTRA_PASSWORD, password)
-            putExtra(FrpcForegroundService.EXTRA_CLIENT_NAME, clientName)
-            if (rpcUrl.isNotBlank()) {
-                putExtra(FrpcForegroundService.EXTRA_RPC_URL, rpcUrl)
+            putExtra(FrpcForegroundService.EXTRA_CLIENT_ID, clientId)
+            putExtra(FrpcForegroundService.EXTRA_CLIENT_SECRET, clientSecret)
+            putExtra(FrpcForegroundService.EXTRA_RPC_URL, rpcUrl)
+            if (apiUrl.isNotBlank()) {
+                putExtra(FrpcForegroundService.EXTRA_API_URL, apiUrl)
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -124,14 +122,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun FrpcPanelUI(
-    onStart: (String, String, String, String, String) -> Unit,
+    onStart: (String, String, String, String) -> Unit,
     onStop: () -> Unit,
     service: FrpcForegroundService?
 ) {
-    var masterUrl by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var clientName by remember { mutableStateOf("") }
+    var clientId by remember { mutableStateOf("") }
+    var clientSecret by remember { mutableStateOf("") }
+    var apiUrl by remember { mutableStateOf("") }
     var rpcUrl by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Stopped") }
     var isRunning by remember { mutableStateOf(false) }
@@ -175,22 +172,10 @@ fun FrpcPanelUI(
         )
 
         OutlinedTextField(
-            value = masterUrl,
-            onValueChange = { masterUrl = it },
-            label = { Text("Master URL") },
-            placeholder = { Text("https://your-server.com:9001") },
-            singleLine = true,
-            enabled = !isRunning,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Username") },
+            value = clientId,
+            onValueChange = { clientId = it },
+            label = { Text("Client ID") },
+            placeholder = { Text("e.g. admin.c.apk") },
             singleLine = true,
             enabled = !isRunning,
             modifier = Modifier.fillMaxWidth()
@@ -199,9 +184,10 @@ fun FrpcPanelUI(
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
+            value = clientSecret,
+            onValueChange = { clientSecret = it },
+            label = { Text("Client Secret") },
+            placeholder = { Text("e.g. b3f8408d-be8d-...") },
             singleLine = true,
             enabled = !isRunning,
             visualTransformation = PasswordVisualTransformation(),
@@ -212,13 +198,14 @@ fun FrpcPanelUI(
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
-            value = clientName,
-            onValueChange = { clientName = it },
-            label = { Text("Client Name") },
-            placeholder = { Text("e.g. my-android-phone") },
+            value = apiUrl,
+            onValueChange = { apiUrl = it },
+            label = { Text("API URL") },
+            placeholder = { Text("https://api.ekxuexi.cn:3003") },
             singleLine = true,
             enabled = !isRunning,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -226,8 +213,8 @@ fun FrpcPanelUI(
         OutlinedTextField(
             value = rpcUrl,
             onValueChange = { rpcUrl = it },
-            label = { Text("RPC URL (optional)") },
-            placeholder = { Text("wss://grpc.ekxuexi.cn:3005") },
+            label = { Text("RPC URL") },
+            placeholder = { Text("wss://grpc.ekxuexi.cn:3003") },
             singleLine = true,
             enabled = !isRunning,
             modifier = Modifier.fillMaxWidth(),
@@ -303,13 +290,10 @@ fun FrpcPanelUI(
         ) {
             Button(
                 onClick = {
-                    if (masterUrl.isNotBlank() && username.isNotBlank() &&
-                        password.isNotBlank() && clientName.isNotBlank()
-                    ) {
+                    if (clientId.isNotBlank() && clientSecret.isNotBlank()) {
                         onStart(
-                            masterUrl.trim(), username.trim(),
-                            password.trim(), clientName.trim(),
-                            rpcUrl.trim()
+                            clientId.trim(), clientSecret.trim(),
+                            apiUrl.trim(), rpcUrl.trim()
                         )
                     }
                 },

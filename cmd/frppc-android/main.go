@@ -358,6 +358,17 @@ func (a *clientApp) register(stream pb.Master_ServerSendClient) error {
 		}
 
 		if resp.GetEvent() == pb.Event_EVENT_REGISTER_CLIENT {
+			// Server sends EVENT_REGISTER_CLIENT on both success and error.
+			// Success: ClientId+SessionId set, Data is nil.
+			// Error: Data contains "rpc auth token is invalid".
+			if len(resp.GetData()) > 0 {
+				fmt.Fprintf(os.Stderr, "registration rejected: %s\n", resp.GetData())
+				if i < 9 {
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				return fmt.Errorf("registration rejected: %s", resp.GetData())
+			}
 			return nil
 		}
 		time.Sleep(3 * time.Second)

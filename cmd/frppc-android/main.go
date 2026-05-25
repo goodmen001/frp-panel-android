@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -216,6 +217,34 @@ func (a *clientApp) run() {
 }
 
 func (a *clientApp) connectAndServe() error {
+	// Diagnose DNS resolution before attempting WebSocket dial
+	if host, port, err := net.SplitHostPort(hostFromURL(a.rpcURL)); err == nil {
+		fmt.Fprintf(os.Stdout, "resolving %s for port %s...\n", host, port)
+		ips, err := net.LookupHost(host)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "DNS lookup failed for %s: %v\n", host, err)
+		} else {
+			fmt.Fprintf(os.Stdout, "DNS resolved %s -> %v\n", host, ips)
+		}
+		// Pre-check TCP connectivity
+		for _, ip := range ips {
+			target := net.JoinHostPort(ip, port)
+			fmt.Fprintf(os.Stdout, "TCP dialing %s...\n", target)
+			tcpCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := (&net.Dialer{}).DialContext(tcpCtx, "tcp", target)
+			cancel()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "TCP dial to %s failed: %v\n", target, err)
+			} else {
+				fmt.Fprintf(os.Stdout, "TCP dial to %s succeeded\n", target)
+				conn.Close()
+				break
+			}
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "invalid RPC URL (cannot parse host:port): %v\n", err)
+	}
+
 	header := http.Header{}
 	dialer := wsgrpc.WebsocketDialer(a.rpcURL, header, a.skipTLSVerify, &nopLogger{})
 
@@ -635,6 +664,22 @@ func (n *nopLogger) Tracef(format string, args ...interface{}) {}
 // normalizeRPCURL ensures the WebSocket gRPC URL includes the /wsgrpc path.
 // The frp-panel master mounts the gRPC WebSocket handler at /wsgrpc.
 // If the URL already has a path (not just "/"), it is left unchanged.
+// hostFromURL extracts the host:port from a ws:// or wss:// URL.
+func hostFromURL(rawURL string) string {
+	// Strip ws:// or wss:// prefix
+	for _, prefix := range []string{"wss://", "ws://", "https://", "http://"} {
+		if strings.HasPrefix(rawURL, prefix) {
+			rawURL = strings.TrimPrefix(rawURL, prefix)
+			break
+		}
+	}
+	// Strip path after the host:port
+	if idx := strings.Index(rawURL, "/"); idx >= 0 {
+		rawURL = rawURL[:idx]
+	}
+	return rawURL
+}
+
 func normalizeRPCURL(url string) string {
 	if url == "" {
 		return url

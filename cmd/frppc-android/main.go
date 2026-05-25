@@ -217,28 +217,43 @@ func (a *clientApp) run() {
 }
 
 func (a *clientApp) connectAndServe() error {
-	// Diagnose DNS resolution before attempting WebSocket dial
+	// Use a custom DNS resolver pointing to Google DNS (8.8.8.8) to
+	// bypass Android's /etc/resolv.conf which is often broken when
+	// CGO_ENABLED=0. The Go pure-Go resolver on Android may hang
+	// trying to query a non-existent local DNS server.
+	//
+	// We resolve the hostname ourselves (with a short timeout), which
+	// also warms Go's internal DNS cache. Then we pass the original
+	// URL (with hostname) to the WebSocket dialer — it will reuse the
+	// cached DNS result rather than doing its own resolution.
 	if host, port, err := net.SplitHostPort(hostFromURL(a.rpcURL)); err == nil {
-		fmt.Fprintf(os.Stdout, "resolving %s for port %s...\n", host, port)
-		ips, err := net.LookupHost(host)
+		r := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 5 * time.Second}
+				return d.DialContext(ctx, "udp", "8.8.8.8:53")
+			},
+		}
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ips, err := r.LookupHost(resolveCtx, host)
+		resolveCancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "DNS lookup failed for %s: %v\n", host, err)
 		} else {
-			fmt.Fprintf(os.Stdout, "DNS resolved %s -> %v\n", host, ips)
-		}
-		// Pre-check TCP connectivity
-		for _, ip := range ips {
-			target := net.JoinHostPort(ip, port)
-			fmt.Fprintf(os.Stdout, "TCP dialing %s...\n", target)
-			tcpCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			conn, err := (&net.Dialer{}).DialContext(tcpCtx, "tcp", target)
-			cancel()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "TCP dial to %s failed: %v\n", target, err)
-			} else {
-				fmt.Fprintf(os.Stdout, "TCP dial to %s succeeded\n", target)
-				conn.Close()
-				break
+			fmt.Fprintf(os.Stdout, "DNS resolved %s -> %v (port %s)\n", host, ips, port)
+			// Warm up TCP connection (pre-connect)
+			for _, ip := range ips {
+				target := net.JoinHostPort(ip, port)
+				tcpCtx, tcpCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				conn, err := (&net.Dialer{}).DialContext(tcpCtx, "tcp", target)
+				tcpCancel()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "TCP pre-connect to %s failed: %v\n", target, err)
+				} else {
+					fmt.Fprintf(os.Stdout, "TCP pre-connect to %s succeeded\n", target)
+					conn.Close()
+					break
+				}
 			}
 		}
 	} else {

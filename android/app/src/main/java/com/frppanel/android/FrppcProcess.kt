@@ -40,25 +40,35 @@ class FrppcProcess(private val context: Context) {
 
     /**
      * Extract the frppc binary from assets to the app's private directory.
+     *
+     * Always overwrites the cached binary so updated APK builds take effect.
      */
     fun extractBinary(): File? {
         val binary = File(context.filesDir, BINARY_NAME)
-        if (binary.exists() && binary.length() > 0L) {
-            Log.i(TAG, "Binary already exists: ${binary.absolutePath} (size=${binary.length()})")
-            return binary
-        }
 
+        // Always re-extract from APK assets so binary updates take effect
+        // even when app data survives across APK upgrades.
         try {
             context.assets.open(BINARY_NAME).use { input ->
-                FileOutputStream(binary).use { output ->
+                FileOutputStream(binary).also { binary.delete() }.use { output ->
                     input.copyTo(output)
                 }
             }
             binary.setExecutable(true)
-            Log.i(TAG, "Binary extracted: ${binary.absolutePath} (size=${binary.length()})")
+            val size = binary.length()
+            Log.i(TAG, "Binary extracted: ${binary.absolutePath} (size=$size)")
+            if (size == 0L) {
+                Log.e(TAG, "Extracted binary is empty")
+                return null
+            }
             return binary
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract binary: ${e.message}", e)
+            // Fall back to cached binary if available
+            if (binary.exists() && binary.length() > 0L) {
+                Log.w(TAG, "Falling back to cached binary: ${binary.absolutePath}")
+                return binary
+            }
             return null
         }
     }

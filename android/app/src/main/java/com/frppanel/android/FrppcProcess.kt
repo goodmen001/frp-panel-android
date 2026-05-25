@@ -49,8 +49,9 @@ class FrppcProcess(private val context: Context) {
         // Always re-extract from APK assets so binary updates take effect
         // even when app data survives across APK upgrades.
         try {
+            binary.delete() // remove old cached binary first
             context.assets.open(BINARY_NAME).use { input ->
-                FileOutputStream(binary).also { binary.delete() }.use { output ->
+                FileOutputStream(binary).use { output ->
                     input.copyTo(output)
                 }
             }
